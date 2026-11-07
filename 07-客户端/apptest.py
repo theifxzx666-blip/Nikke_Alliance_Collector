@@ -913,6 +913,40 @@ def main():
         else:
             _os.environ["APPDATA"] = _old_ad
 
+    # ---------------- 5u. v1.26：出口前的 BOSS 闭集归一
+    # 真机：BOSS 名和库里对不上，而且置信度看着"没变化"——因为出口前那一刀
+    # 从来没有被调用过（`_norm_rows` 是从未接线的死代码）。
+    from app.engine import Engine as _Engine
+    from raid_core import match_boss as _mb
+    _B = ["邪魔", "医师", "铁匠", "重装火神R", "古铁"]
+    for _t, _want, _how in (("牙魔", "邪魔", "形近"), ("感医师思", "医师", "包含"),
+                            ("本铁匠", "铁匠", "包含"), ("铁E", "铁匠", "形近"),
+                            ("重装火神", "重装火神R", "包含"),
+                            ("古铁", "古铁", "exact"),
+                            ("乱写的东西", None, "无")):
+        _got = _mb(_t, _B)
+        check(f"闭集归一 {_t} → {_want or '不归'}", _got == (_want, _how), str(_got))
+
+    _e5 = _Engine()
+    _e5._bosses = _B
+    _src = [
+        {"member": "甲", "boss": "感医师思", "conf": 0.92},   # 包含 → 医师，分数下调
+        {"member": "乙", "boss": "", "conf": 0.80},           # 缺，同成员唯一 → 回填
+        {"member": "乙", "boss": "铁匠", "conf": 0.88},
+        {"member": "丙", "boss": "古铁", "conf": 0.90},        # 已正确，不动
+        {"member": "丁", "boss": "牙魔", "conf": 0.70},        # 首字错 → 形近
+    ]
+    _out = _e5._finalize([dict(r) for r in _src])
+    check("出口归一：包含关系", _out[0]["boss"] == "医师", _out[0]["boss"])
+    check("出口归一：置信度如实下调", _out[0]["conf"] <= 0.90, str(_out[0]["conf"]))
+    check("出口归一：短名错字也能修", _out[4]["boss"] == "邪魔", _out[4]["boss"])
+    check("缺 BOSS 按同成员唯一值回填", _out[1]["boss"] == "铁匠", _out[1]["boss"])
+    check("已正确的行原样保留",
+          _out[3]["boss"] == "古铁" and _out[3]["conf"] == 0.90, str(_out[3]))
+    check("不动调用方传进来的原始行", _src[0]["boss"] == "感医师思", _src[0]["boss"])
+    check("没配 BOSS 库时原样返回",
+          _Engine()._finalize([{"boss": "感医师思"}])[0]["boss"] == "感医师思", "")
+
     # 键名不再写死 F2
     check("提示文案取当前键位（F7）", KEYS.current("attach") == "F7",
           KEYS.current("attach"))

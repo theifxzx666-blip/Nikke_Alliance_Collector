@@ -931,6 +931,23 @@ pathtest / wintest 全绿；`--shot` 0 异常；打包 311 MB。
   有 32 个预设 + `NOTICE.txt`；且 **exe 所在目录跑完只剩 exe 自己**（多一个文件就退出）。
   `_selftest()` 改成返回 bool，静态分支不再假装做过动态检查。
 
+### 2026-11-07 21:15 v1.26：伤害记录 BOSS 归一与置信度
+
+用户真机：BOSS 名称没按 boss 库核对、出现错名、部分行没填全、置信度不更新。
+
+- **出口那道归一从来没被调用**：`Engine._norm_rows()` 从 v1.0 起就是死代码，
+  真正生效的只有 `raid_hard.boss_norm`（掐字 / 尾巴全等 / 首字唯一，阈值 0.6）。
+- **短名错一个字两套规则都救不了**：两字 BOSS 错一个字时 `SequenceMatcher` 只有 0.5，
+  `match_boss` 阈 0.75、`boss_norm` 阈 0.6 都过不去。
+- 修：`match_boss` 加「形近」规则（等长 + 只差一字 + 候选唯一）；
+  `_norm_rows` 换成 `_finalize` 接到 `emit_rows`（所有行的唯一出口），
+  归一后按依据下调 conf（exact 1.0 / 包含 0.90 / 形近 0.60 / 相似 0.65），
+  缺 BOSS 的行按"同成员唯一值"回填。
+- ⚠ `_finalize` 只改副本：`capture` 内部拿原始行做 patch 判定，
+  那里的 `conf` 必须是识别分数本身。
+- ⚠ 教训：**死代码不会有任何测试失败**。`hardtest` 只测 `boss_norm` 的字符串规则，
+  不经过 `Engine`；`apptest` 没覆盖 `emit_rows` —— 两层都没拦住。
+
 ---
 
 ## 项目全史（v1.0 → v1.25）

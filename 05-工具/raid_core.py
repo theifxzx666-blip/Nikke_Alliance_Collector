@@ -473,6 +473,15 @@ def match_boss(text, bosses):
             return name, "包含"
         if key in k and len(k) - len(key) <= 2:
             return name, "包含"
+    # 等长且只差一个字：两字 BOSS（邪魔 / 医师 / 铁匠 / 古铁）错一个字时
+    # 相似度只有 0.5，永远过不了下面 0.75 的线 —— 但闭集里唯一的这个候选
+    # 本身就足以定人。必须放在相似度之前，否则短名的错字永远修不回来。
+    if len(key) >= 2:
+        near = [name for k, name in kmap.items()
+                if k and len(k) == len(key)
+                and sum(a != b for a, b in zip(k, key)) == 1]
+        if len(near) == 1:
+            return near[0], "形近"
     # 兜底：相似度（字形相近、错一两个字）
     import difflib
     best, score = None, 0.0

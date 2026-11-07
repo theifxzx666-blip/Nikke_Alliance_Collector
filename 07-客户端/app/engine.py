@@ -14,8 +14,9 @@ import booklib as BK
 from raid_capture import CaptureEngine
 
 import raid_ocr as ro
+import raid_core as rc
 import raid_nav as rn
-from raid_hard import boss_norm, load_bosses, read_hard
+from raid_hard import load_bosses, read_hard
 
 
 class Engine(QObject, CaptureEngine):
@@ -39,8 +40,60 @@ class Engine(QObject, CaptureEngine):
     def say(self, msg, level="INFO"):
         self.logged.emit(str(msg))
 
+    # ---------------- 出口前的最后一道：BOSS 名按本期表再核一次
+    #
+    # 为什么 read_hard 里归一过了还要再来一遍：两套规则的覆盖面不一样。
+    # `raid_hard.boss_norm` 只有掐字 / 尾巴全等 / 首字唯一三招，阈值 0.6；
+    # `raid_core.match_boss` 额外认「包含」（`感医师思` → `医师`）并按相似度兜底。
+    # 任何一道能修好，这一行就该拿去用 —— 一期盟战只有 5 个固定 BOSS，
+    # 闭集比对是这里最硬的依据。
+    _HOW_SCORE = {"exact": 1.0, "包含": 0.90, "形近": 0.60, "相似": 0.65}
+
+    def _finalize(self, rows):
+        """归一 BOSS 名、按归一的确定性下调置信度、回填能确定的本期 BOSS。
+
+        只改传进来的这一份副本 —— `capture` 内部还要拿原始行做补全与 patch
+        判定，那里的 `conf` 必须是识别分数本身，不能被这里的降分污染。
+        """
+        bosses = [b for b in (self._bosses or []) if b]
+        if not bosses:
+            return rows
+        for r in rows:
+            raw = (r.get("boss") or "").strip()
+            if not raw:
+                continue
+            canon, how = rc.match_boss(raw, bosses)
+            if not canon or canon == raw:
+                continue
+            r["boss"] = canon
+            note = r.get("boss_note") or ""
+            r["boss_note"] = (f"{note} · 闭集归一到「{canon}」（{how}）"
+                              if note else f"闭集归一到「{canon}」（{how}）")
+            # 归一越勉强，这一行越不该跟"一眼读对"的行享受同一个分数。
+            # 以前只改名字不改分，界面上完全看不出哪几条是猜出来的。
+            ceiling = self._HOW_SCORE.get(how, 0.6)
+            old = r.get("conf")
+            r["conf"] = round(ceiling if old is None else min(float(old), ceiling), 3)
+
+        # 缺 BOSS 的行：**同一成员在本份数据里只有唯一 BOSS** 时才回填。
+        # 不按"上一行/下一行"猜 —— 一个人打两刀不同 BOSS 是常态。
+        seen = {}
+        for r in rows:
+            m, b = r.get("member"), r.get("boss")
+            if m and b:
+                seen.setdefault(m, set()).add(b)
+        for r in rows:
+            if (r.get("boss") or "") or not r.get("member"):
+                continue
+            cand = seen.get(r["member"]) or set()
+            if len(cand) == 1:
+                r["boss"] = next(iter(cand))
+                r["boss_note"] = "同一成员其它行回填"
+        return rows
+
     def emit_rows(self, rows):
-        self.rowsChanged.emit([dict(r) for r in rows])
+        # 发射前统一过 `_finalize`：这是所有行（首屏 / 拼接 / 补全）的唯一出口
+        self.rowsChanged.emit(self._finalize([dict(r) for r in rows]))
 
     def emit_done(self):
         self.finished.emit()
@@ -168,9 +221,3 @@ class Engine(QObject, CaptureEngine):
         self._entered_by_nav = bool(getattr(nav, "last_entered", False))
         return ok, msg
 
-    # 客户端比旧工具多一步：把 BOSS 名按本期表归一
-    def _norm_rows(self, rows):
-        for r in rows:
-            raw = r.get("boss") or ""
-            r["boss"] = boss_norm(raw, self._bosses)
-        return rows
