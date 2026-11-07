@@ -1834,8 +1834,10 @@ class Shell(QWidget):
         if sp:
             extra = (f" · 上次拼接 k={sp.get('shift_rows')} 重叠 {sp.get('hit')}/{sp.get('overlap')}"
                      f" 追加 {sp.get('added')} 修正 {len(sp.get('patch') or [])}")
+        _gap = getattr(eng, "_gap", eng.DRAG_GAP)      # v1.59：显示当前档位而不是起始档
         lines.append(f"采集  {len(self._rows)} 条 · 行距 {getattr(eng, 'last_pitch', 0):.0f}"
-                     f" · 拖动 {eng.DRAG_STEP}px/{int(eng.DRAG_GAP * 1000)}ms{extra}")
+                     f" · 拖动 {eng.DRAG_STEP}px/{int(_gap * 1000)}ms"
+                     f"（{eng.DRAG_STEP / _gap:.0f}px/s）{extra}")
         lines.append(f"窗口位  {self.width()}×{self.height()}"
                      f" · 并排 {_side(self.cfg.get('snap_side'))}"
                      f" · 跟随 {'开' if self._watch.isActive() else '关'}")

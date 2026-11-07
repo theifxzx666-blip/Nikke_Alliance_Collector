@@ -386,32 +386,36 @@ check("_quota_after 会先去重",
 
 # ---------------- v1.56 滚动采集：位置就是身份 ----------------
 #
-# 这一段仿真整条 `capture`（12 条 / 每屏 6 条 / 每次滚 2 条），故意制造三件事：
-#   · 位移读数每次都偏 8px  —— 考 `_calibrate` 能不能把误差当屏吃掉
+# 这一段仿真整条 `capture`（12 条 / 每屏 5~6 条 / 每次滚 2~2.5 行），故意制造三件事：
+#   · 位移读数每次都是 None  —— 复刻 04:37 那轮"量不出来"的现场
 #   · 某屏把 `人4` 读成 `人4x` —— 同一个位置的两份观测必须合成一条
 #   · 某屏少读一条           —— 那一屏缺的位置不能把别人挤歪
 # 断言：最终 12 条、顺序完全正确、每条 `_gy` 都落在真值 ±1 行内。
+#
+# v1.59：仿真从"按屏号取片"改成**按滚动像素取片** —— 步长现在会在 2.0/2.5 行之间
+# 自适应，写死 2 行的话测的是一个不存在的实现。
 import threading
 
 _ALL = [{"member": f"人{i}", "boss": "古铁", "damage": 1000 + i,
          "damage_raw": str(1000 + i), "pct": f"{i}%", "conf": 0.9} for i in range(12)]
 _PITCH = 100.0
-_STEP = 200.0                        # 每次滚 2 行
+_TOP = 20.0                          # 第 0 条在全局 y=20 处
+_VIEW_H = 600.0                      # 可见高度
+_CARD_H = 80.0                       # 卡片自身高度（整张露出才算数）
 
 
 class _Img:
-    def __init__(self, screen):
-        self.screen = screen
+    def __init__(self, off):
+        self.off = off               # 全局已经滚过的像素（可以是半行）
 
     def crop(self, box):
         return self
 
 
 class _Loc:
-    cards = [1] * 6
-    box = (0, 0, 600, 600)
-
-    def __init__(self):
+    def __init__(self, n):
+        self.cards = [1] * n
+        self.box = (0, 0, 600, 600)
         self.pitch = _PITCH
 
 
@@ -423,7 +427,8 @@ class _Scroll(CE):
         self._roster = None
         self._bosses = []
         self.last_pitch = _PITCH
-        self.screen = 0
+        self.off = 0.0
+        self.dists = []              # 每次拖动的像素（验证步长自适应真的生效）
         self.said = []
         self.got = []
         self._offset = 0.0
@@ -444,38 +449,40 @@ class _Scroll(CE):
         return None                # 仿真里画面本来就在顶部
 
     def _drag_list(self, region, dist, up=False):
-        self.screen += 1
+        self.dists.append(dist)
+        self.off += dist
         return True
 
     def _shift_by_template(self, prev_raw, cur_raw):
         # **量不出来**：复刻 04:37 那轮（位移报 0）的现场。
-        # 现在定位改用内容反算，这个值只影响"预测下一屏起算点"，不影响顺序。
+        # 现在定位改用内容反算，这个值只影响"预测下一屏起算点"和调速档位。
         return (None, 0.0)
 
 
 def _read(img, eng, roster=None, bosses=None):
-    off = img.screen * 2
-    seg = _ALL[off:off + 6]
     out = []
-    for j, r in enumerate(seg):
+    for i, r in enumerate(_ALL):
+        y = _TOP + i * _PITCH - img.off
+        if y < 0 or y + _CARD_H > _VIEW_H:
+            continue                   # 被上下边缘切掉，读不到
         d = dict(r)
-        d["_y"] = int(100 + j * _PITCH)
-        # 第 2 屏把 `人4` 读成 `人4x`：同一个位置、同一个 BOSS、同一伤害
-        if img.screen == 2 and d["member"] == "人4":
+        d["_y"] = int(round(y))
+        # 滚到 200px 那一帧把 `人4` 读成 `人4x`：同一位置、同 BOSS、同伤害
+        if abs(img.off - 200.0) < 1 and d["member"] == "人4":
             d["member"] = "人4x"
             d["conf"] = 0.55
-        # 第 3 屏少读一条（模拟边缘被裁）
-        if img.screen == 3 and d["member"] == "人7":
+        # 滚到 450px 那一帧少读一条（模拟边缘被裁）
+        if abs(img.off - 450.0) < 1 and d["member"] == "人7":
             continue
         out.append(d)
-    return out, _Loc()
+    return out, _Loc(len(out))
 
 
 _orig = (A.grab, A.wait_settled, RH.read_hard)
 try:
     _sc = _Scroll()
-    A.grab = lambda region: _Img(_sc.screen)
-    A.wait_settled = lambda region, raw: (_Img(_sc.screen), 0.0, 0)
+    A.grab = lambda region: _Img(_sc.off)
+    A.wait_settled = lambda region, raw, **kw: (_Img(_sc.off), 0.0, 0)
     RH.read_hard = _read
     _sc.capture((0, 0, 100, 100))
 finally:
@@ -492,21 +499,28 @@ check("滚动采集：每条位置落在真值 1 行内",
 check("读歪的那份观测被同一位置的好读数盖掉",
       all((r.get("conf") or 0) >= 0.9 for r in _rows),
       str([(r["member"], r["conf"]) for r in _rows if (r.get("conf") or 0) < 0.9]))
+# v1.59 步长自适应：第一屏只敢走 2.0 行，连续两屏认得全了才升到 2.5 行。
+# 这两条一起构成"提速但不丢行"的前提 —— 没有升档说明参数没生效，
+# 中途一直不回到 2.0 说明"重叠变薄就退守"的闸门是坏的。
+check("步长自适应：先用 2.0 行起步", any(abs(d - 200) < 1 for d in _sc.dists),
+      str(_sc.dists))
+check("步长自适应：稳定后升到 2.5 行", any(abs(d - 250) < 1 for d in _sc.dists),
+      str(_sc.dists))
 
 # --- 内容定位：像素位移完全不可用时，坐标仍然必须准
 _loc_rows = []
 _eng2 = _Scroll()
 for _k in range(4):
-    _recs, _l = _read(_Img(_k), None)
+    _recs, _l = _read(_Img(_k * 200.0), None)
     if _loc_rows:
         _eng2._offset, _n = _eng2._offset_from_content(_loc_rows, _recs,
                                                       _eng2._offset, _PITCH)
     for _r in _recs:
         _r["_gy"] = int(_eng2._offset + int(_r["_y"]))
     _eng2._absorb_all(_loc_rows, _recs, _PITCH)
-    _eng2._offset += _STEP          # 预测值；下一屏会被内容反算覆盖
+    _eng2._offset += 200.0          # 预测值；下一屏会被内容反算覆盖
 check("内容反算：四屏下来坐标仍落在真值上",
-      all(abs(int(r["_gy"]) - (100 + int(r["member"][1:]) * _PITCH)) <= 1
+      all(abs(int(r["_gy"]) - (_TOP + int(r["member"][1:]) * _PITCH)) <= 1
           for r in _loc_rows),
       str([(r["member"], r["_gy"]) for r in _loc_rows[:5]]))
 check("内容反算：条数不重复（4 屏覆盖 12 条）", len(_loc_rows) == 12, f"{len(_loc_rows)} 条")
@@ -554,6 +568,58 @@ check("模板匹配：同一张图 → 位移 0", _sh2 == 0, str(_sh2))
 _blank = _Image.fromarray(_np.full((532, 471), 240, dtype=_np.uint8))
 _sh3, _score3 = _e._shift_by_template(_blank, _blank)
 check("模板匹配：纯色图认不出就返回 None（不硬报位移）", _sh3 is None, str(_sh3))
+
+
+# ---------------- v1.59 闭环调速 / 步长自适应 ----------------
+#
+# 提速的**前提**是甩动能被发现。这一段的判据全部来自 `_tune_speed`：
+#   实测位移 ≈ 计划 → 升档；实测偏 20% 以上 → 立刻降档；测不出来 → 不动。
+# 任何一条反过来，都可能出现"越滑越偏"（v1.35 的翻车方式）。
+_sp = CE()
+_sp._lvl, _sp._gap, _sp._bad, _sp._good = 0, CE.GAPS[0], 0, 0
+_sp.said = []
+_sp.say = lambda m, lv="INFO": _sp.said.append(m)
+
+_sp._tune_speed(200, 200)          # 第 1 次准
+check("调速：只准 1 次还不升档", _sp._lvl == 0, str(_sp._lvl))
+_sp._tune_speed(200, 200)          # 第 2 次准 → 升
+check("调速：连准 2 次升到中速", _sp._lvl == 1, str(_sp._lvl))
+check("调速：升档后 gap 变小（136px/s）",
+      abs(_sp._gap - 0.022) < 1e-9, str(_sp._gap))
+_sp._tune_speed(200, 200)
+_sp._tune_speed(200, 200)
+check("调速：再连准 2 次升到快速", _sp._lvl == 2, str(_sp._lvl))
+check("调速：不会越过最高档", len(CE.GAPS) == 3, str(CE.GAPS))
+
+_sp._tune_speed(400, 200)          # 甩了一倍 → 立刻降
+check("调速：甩动（位移 2 倍）立刻降档", _sp._lvl == 1, str(_sp._lvl))
+_sp._tune_speed(400, 200)
+_sp._tune_speed(400, 200)
+check("调速：连续甩动降回保守档", _sp._lvl == 0, str(_sp._lvl))
+check("调速：保守档不会降到负", _sp._tune_speed(400, 200) == 0, str(_sp._lvl))
+
+_sp2 = CE()
+_sp2._lvl, _sp2._gap, _sp2._bad, _sp2._good = 0, CE.GAPS[0], 0, 0
+_sp2.say = lambda m, lv="INFO": None
+for _ in range(6):
+    _sp2._tune_speed(None, 200)    # 模板匹配一直认不出来
+check("调速：位移测不出来时绝不升档", _sp2._lvl == 0, str(_sp2._lvl))
+
+_sp3 = CE()
+_sp3._lvl, _sp3._gap, _sp3._bad, _sp3._good = 1, CE.GAPS[1], 0, 0
+_sp3.say = lambda m, lv="INFO": None
+_sp3._tune_speed(0, 200)           # 画面完全没动
+check("调速：位移 0（拖动失效）立刻降档", _sp3._lvl == 0, str(_sp3._lvl))
+
+# --- 步长自适应：升档要连续两屏，退档只要一屏不达标
+check("步长：首屏只走 2.0 行", CE._pick_rows(6, 4, 0) == (2.0, 1), str(CE._pick_rows(6, 4, 0)))
+check("步长：连准两屏升到 2.5 行", CE._pick_rows(6, 4, 1) == (2.5, 2), str(CE._pick_rows(6, 4, 1)))
+check("步长：只认出 4 条就退守 2.0",
+      CE._pick_rows(4, 4, 5) == (2.0, 0), str(CE._pick_rows(4, 4, 5)))
+check("步长：重叠只剩 2 条就退守 2.0",
+      CE._pick_rows(6, 2, 5) == (2.0, 0), str(CE._pick_rows(6, 2, 5)))
+check("步长：重叠 3 条仍可上 2.5（票数刚好够）",
+      CE._pick_rows(6, 3, 1) == (2.5, 2), str(CE._pick_rows(6, 3, 1)))
 
 
 print()

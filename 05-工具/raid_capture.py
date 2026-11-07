@@ -27,14 +27,20 @@ import alliance_ocr as A
 class CaptureEngine:
     """把 Tk 客户端里那套滚采流程原样搬出来，供两个前端复用。"""
 
-    # 拖动参数**固定**用名单采集实测值 (3px, 28ms)≈107px/s，不做运行时试探。
-    # 10:01 那轮教训：试探把"大步 286px/s"选成了最优（188px），但那 188px 是松手
-    # 后惯性途中的读数，实际每次滚多少不可控，紧接着就出现"重叠 2/5 对不上"。
-    DRAG_STEP, DRAG_GAP = A.DRAG_STEP_PX, A.DRAG_STEP_GAP
+    # 拖动**步长**固定 3px（名单采集实测值），**步间隔**三档自适应（v1.59）。
+    # 单屏 3.32s 里拖动占 2.12s，速度是唯一大杠杆：107px/s → 176px/s。
+    # 10:01 那轮"试用大步 286px/s"之所以失败，是因为当时相关峰恒为 0，
+    # 测到的 188px 是松手后惯性途中的假读数。现在 `_shift_by_template` 能给出
+    # 真实位移，闭环校验成立 —— 前提变了，结论才敢变。
+    DRAG_STEP = A.DRAG_STEP_PX
+    GAPS = (A.DRAG_STEP_GAP, 0.022, 0.017)     # 107 / 136 / 176 px/s
+    DRAG_GAP = GAPS[0]                          # 起始档 = v1.58 原值，兼容旧引用
     # 每次滚多少行。2.5 → 2.0（v1.36）：5 轮真实样本里 165 人次漏了 7 条，
     # 全落在"步长偏了半行、边界行被两屏各裁一半"这种位置。滚 2 行时重叠 4 行，
     # 边界行在两屏都是完整行。代价是拖动次数 +25%（记录页 26 → 33 次，约 +30 秒）。
-    SCROLL_ROWS = 2.0
+    # v1.59：上限放到 2.5，但只在上一屏重叠 ≥5 条时才敢用（见 capture 的 _rows_now）。
+    SCROLL_ROWS = 2.5
+    SCROLL_ROWS_MIN = 2.0                       # 重叠变薄时的退守值
 
     # 给调试面板看的现场快照（不算逻辑，只是留档）
     last_pitch = 0.0
@@ -66,8 +72,13 @@ class CaptureEngine:
         return (int(x0 + rx0 * w), int(y0 + ry0 * h),
                 int(x0 + rx1 * w), int(y0 + ry1 * h))
 
-    def _drag_raw(self, cx, y_from, y_to, step_px, gap):
-        """自己实现一次拖动，步长与步间隔都可配（`A.drag_at` 的间隔是写死的常量）。"""
+    def _drag_raw(self, cx, y_from, y_to, step_px, gap=None):
+        """自己实现一次拖动，步长与步间隔都可配（`A.drag_at` 的间隔是写死的常量）。
+
+        gap=None 时用当前速度档 `self._gap`（v1.59 闭环调速会改它）。
+        """
+        if gap is None:
+            gap = getattr(self, "_gap", self.DRAG_GAP)
         u = ctypes.windll.user32
         u.SetCursorPos(int(cx), int(y_from))
         time.sleep(0.05)
@@ -77,14 +88,16 @@ class CaptureEngine:
         for i in range(1, n + 1):
             u.SetCursorPos(int(cx), int(round(y_from + (y_to - y_from) * i / n)))
             time.sleep(gap)
-        # 终点压住不动、但持续发事件：游戏把"最后一刻的速度"当甩动
-        for k in range(4):
+        # 终点压住不动、但持续发事件：游戏把"最后一刻的速度"当甩动。
+        # v1.59：4×50ms → 3×45ms，松手后静默 180ms → 120ms（共省 0.125s/屏）。
+        # 抖动期间光标基本不动，速度早已归零，次数减一次不影响防甩。
+        for k in range(3):
             u.SetCursorPos(int(cx), int(y_to) + (1 if k % 2 else 0))
-            time.sleep(0.05)
+            time.sleep(0.045)
         u.SetCursorPos(int(cx), int(y_to))
         time.sleep(0.02)
         u.mouse_event(0x0004, 0, 0, 0, 0)          # LEFTUP
-        time.sleep(0.18)                            # 松手后别动光标
+        time.sleep(0.12)                            # 松手后别动光标
 
     def _drag_list(self, region, dist, up=False):
         """在框内固定位置起手拖动，不依赖 scroll_once 的"边缘 1/8"默认点。
@@ -109,12 +122,75 @@ class CaptureEngine:
             y_to = int(max(y0 + 12, y_from - dist))
         if abs(y_to - y_from) < A.MIN_DRAG_PX // 2:
             return False
-        self._drag_raw(cx, y_from, y_to, self.DRAG_STEP, self.DRAG_GAP)
+        # 实际能拖多远（框矮时够不到计划距离）。v1.59：调速与坐标预测都必须用它，
+        # 否则"框太矮只拖了 150px"会被当成"计划 215px 却只走了 150px"→ 误判甩动、一路降档。
+        self._last_drag_px = abs(y_to - y_from)
+        self._drag_raw(cx, y_from, y_to, self.DRAG_STEP)
         try:
             A.park_cursor(region, self.win)     # 悬停高亮会冒充"画面在动"
         except Exception:
             pass
         return True
+
+    @classmethod
+    def _pick_rows(cls, n_recs, n_hit, good):
+        """下一屏滚几行。返回 (行数, 新的连续达标计数)。
+
+        认全了（≥5 条）且重叠 ≥3 才敢上 2.5 行 —— 重叠是 `_offset_from_content`
+        的票源，票不够就会"坐标漂半行 → 同一条记录裂成两条"。而且要连续两屏
+        达标才升，单屏达标就升会在漏字屏上来回抖。
+        """
+        if n_recs >= 5 and n_hit >= 3:
+            good += 1
+        else:
+            good = 0
+        return (cls.SCROLL_ROWS if good >= 2 else cls.SCROLL_ROWS_MIN), good
+
+    def _tune_speed(self, shift, dist):
+        """按实测位移调拖动速度档位（0=107 / 1=136 / 2=176 px/s，v1.59）。
+
+        为什么现在敢调速：`_shift_by_template` 能给出**真实**位移。10:01 那轮
+        "试探 286px/s"之所以翻车，是因为当时相关峰恒为 0，测到的 188px 是松手后
+        惯性途中的假读数 —— 前提是假测量。现在位移可验证，闭环才成立。
+
+        甩动判据是**相对误差**而非绝对阈值：步长 2.0/2.5 行本来就不同，
+        只要实测和计划对得上就是没甩。`shift is None`（模板匹配没认出）
+        时**保持当前档不动** —— 不知道有没有甩，就不许加速。
+        """
+        top = len(self.GAPS) - 1
+        lvl = getattr(self, "_lvl", 0)
+        self._bad = getattr(self, "_bad", 0)
+        self._good = getattr(self, "_good", 0)
+        if not dist:
+            return lvl
+        if shift is None:
+            self._bad += 1
+        else:
+            s, d = abs(int(shift)), int(dist)
+            err = abs(s - d) / float(max(1, d))
+            if err <= 0.15:
+                self._good += 1
+                self._bad = 0
+            else:
+                self._good = 0
+                # 甩动（多滚）或没拖够（少滚）都比噪声严重，直接记两次。
+                # 阈值留 15% 余量：起手死区 + 惯性尾巴本来就吃掉 10px 上下，
+                # 卡太紧会把正常拖动判成甩动，一路降档反而更慢。
+                self._bad += 2 if (err > 0.25 or s < 5) else 1
+        if self._bad >= 2 and lvl > 0:
+            lvl -= 1
+            self._gap = self.GAPS[lvl]
+            self._bad = self._good = 0
+            self.say(f"位移不稳 → 拖动降到 {self.DRAG_STEP / self._gap:.0f}px/s"
+                     f"（{self.DRAG_STEP}px/{int(self._gap * 1000)}ms）", "WARN")
+        elif self._good >= 2 and lvl < top:
+            lvl += 1
+            self._gap = self.GAPS[lvl]
+            self._bad = self._good = 0
+            self.say(f"位移稳定 → 拖动升到 {self.DRAG_STEP / self._gap:.0f}px/s"
+                     f"（{self.DRAG_STEP}px/{int(self._gap * 1000)}ms）")
+        self._lvl = lvl
+        return lvl
 
     def _shift_by_template(self, prev_raw, cur_raw):
         """用模板匹配求当前帧相对上一帧的位移。返回 (px, 峰值)。正数 = 内容上移。
@@ -804,20 +880,26 @@ class CaptureEngine:
         `rows` 永远按 `_gy` 有序，所以顺序不再依赖任何"插到第几个"的推算。
         """
         from raid_hard import MAX_SCREENS, read_hard    # 不含 UI，打包时不会拖进 tkinter
+        _t_all = time.time()          # v1.59：整轮计时（含回顶），收工时报账
         try:
             eng = A.get_engine()
             rows = None
             pitch = 0.0
+            # v1.59 调速状态：起始档 = v1.58 原值，靠 `_tune_speed` 逐屏往上爬
+            self._lvl = 0
+            self._gap = self.GAPS[0]
+            self._bad = self._good = 0
+            self._rows_good = 0
             raw = A.grab(region)
             img = self._crop(raw)
             # 先认一帧拿到行距，再把列表拉回第一行（只往下滚，从中间起采会漏上面）
             try:
                 _r0, _l0 = read_hard(img, eng, self._roster, self._bosses)
                 if _l0.pitch:
-                    self.say(f"行距 {_l0.pitch:.0f}px · 拖动速度固定 "
-                             f"{self.DRAG_STEP}px/{int(self.DRAG_GAP * 1000)}ms"
-                             f"（≈{self.DRAG_STEP / self.DRAG_GAP:.0f}px/s，"
-                             f"就是 09:11 那轮验证过的参数）")
+                    self.say(f"行距 {_l0.pitch:.0f}px · 拖动 "
+                             f"{self.DRAG_STEP}px/{int(self.GAPS[0] * 1000)}ms 起步"
+                             f"（≈{self.DRAG_STEP / self.GAPS[0]:.0f}px/s，"
+                             f"最多爬到 {self.DRAG_STEP / self.GAPS[-1]:.0f}px/s）")
                     # 导航进入时页面确实在第一行，但**第一行不一定在框里**：
                     # 框的上沿是按卡片列表拖的，顶部日期栏（第1天/第2天）压着
                     # 第一条卡片的上半截 —— 实测那条从头到尾没进过 CSV（v1.44）。
@@ -837,9 +919,13 @@ class CaptureEngine:
             _moved = 0
             _still = 0
             _k = -1
+            # v1.59：本屏计划滚几行。只有"上一屏认全了、且重叠够厚"才敢用 2.5，
+            # 否则退回 2.0 —— 保证 `_offset_from_content` 至少有 3~4 条可投票。
+            _rows_now = self.SCROLL_ROWS_MIN
             for _k in range(MAX_SCREENS):
                 if self._stop.is_set():
                     break
+                _t_s = time.time()
                 recs, loc = read_hard(img, eng, self._roster, self._bosses)
                 if not loc.cards:
                     self.say("这一屏没认到记录，收工" if rows is None else "这一屏没有卡片 → 到底")
@@ -865,12 +951,16 @@ class CaptureEngine:
                              + "、".join((r.get("member") or "?") for r in recs[:6]))
                 else:
                     _add, _upd = self._absorb_all(rows, recs, pitch)
-                    self.last_splice = {"added": _add, "hit": len(recs) - _add,
+                    _hit = len(recs) - _add
+                    _rows_now, self._rows_good = self._pick_rows(
+                        len(recs), _hit, self._rows_good)
+                    self.last_splice = {"added": _add, "hit": _hit,
                                         "overlap": len(recs), "patch": [],
                                         "shift_rows": _moved}
                     self.say(f"拼接 +{_add} 条（位移 {_moved} 行，"
-                             f"重叠 {len(recs) - _add}/{len(recs)}"
-                             + (f" · 更新 {_upd} 条读数" if _upd else "") + "）")
+                             f"重叠 {_hit}/{len(recs)}"
+                             + (f" · 更新 {_upd} 条读数" if _upd else "")
+                             + f" · {time.time() - _t_s:.1f}s）")
                 _last_off = _offset
                 self.emit_rows(rows)
                 if self._stop.is_set():
@@ -886,7 +976,7 @@ class CaptureEngine:
                         if not self._drag_list(region, int(min(A.DRAG_MAX, max(
                                 A.MIN_DRAG_PX, pitch * self.SCROLL_ROWS * 2)))):
                             break
-                        raw, _s, _st = A.wait_settled(region, raw)
+                        raw, _s, _st = A.wait_settled(region, raw, min_wait=0.24)
                         img = self._crop(raw)
                         continue
                     self.say("列表到底了：连续两屏没有新记录", "WARN")
@@ -900,18 +990,23 @@ class CaptureEngine:
 
                 # ---- 滚一屏。位移只用来**预测**下一屏的起算点，下一屏会被
                 # 内容反算覆盖掉；量不出来就按计划步长推进，保证坐标一定在走。
-                dist = int(min(A.DRAG_MAX, max(A.MIN_DRAG_PX, pitch * self.SCROLL_ROWS)))
+                dist = int(min(A.DRAG_MAX, max(A.MIN_DRAG_PX, pitch * _rows_now)))
                 if not self._drag_list(region, dist):
                     self.say("拖动出不了手（框太小）→ 收工", "WARN")
                     break
                 _prev = raw
-                raw, _s, _st = A.wait_settled(region, raw)
+                raw, _s, _st = A.wait_settled(region, raw, min_wait=0.24)
                 img = self._crop(raw)
                 _sh, _co = self._shift_by_template(_prev, raw)
+                # v1.59：用实测位移闭环调速（甩动会被这里立刻发现并降档）。
+                # 基准取**实际拖出去的距离减去起手死区**，不是计划距离 ——
+                # 框矮时计划 215 只能拖 150，不减死区会把"框矮"误判成"甩动"。
+                _reach = max(1, getattr(self, "_last_drag_px", dist) - A.DRAG_SLOP)
+                self._tune_speed(_sh, _reach)
                 if _sh is not None and abs(_sh) >= 5:
                     _offset += abs(int(_sh))
                 else:
-                    _offset += pitch * self.SCROLL_ROWS
+                    _offset += _reach
             # v1.54：成员额度锚定放在最终排序**之前** —— 归位后可能撞成同一条，
             # 还能被下面那次去重收掉；报告也要早于"超过 3 条"，否则用户看到
             # 某人 4 条会先怀疑是重复采集。
@@ -962,7 +1057,13 @@ class CaptureEngine:
             if _miss:
                 self.say(f"⚠ 第 {_miss} 条缺字段（导出时会再点名）", "WARN")
             _people = len({r["member"] for r in _rows if r.get("member")})
-            self.say(f"收工：{len(_rows)} 条 · {_people} 名成员")
+            # v1.59：把速度账当场报出来 —— 提速方案是否生效，看这一行就够
+            _el = time.time() - _t_all
+            _n_screen = max(0, _k + 1)
+            _gap = getattr(self, "_gap", self.GAPS[0])
+            self.say(f"收工：{len(_rows)} 条 · {_people} 名成员 · {_el:.0f}s"
+                     f"（{_n_screen} 屏 · 平均 {_el / max(1, _n_screen):.2f}s/屏 · "
+                     f"拖动 {self.DRAG_STEP / max(0.001, _gap):.0f}px/s）")
             # v1.55：条数对不上就当场说。一个人一轮 3 刀，差 2 条以上就不正常
             # （1 条可能是有人只打了 2 刀，见 `浩然菌` 那种），不然用户只能手工数。
             _short = 3 * _people - len(_rows)

@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """版本与项目信息。改版本只改这里，关于窗口和标题徽标都读它。"""
 
-VERSION = "1.58"
+VERSION = "1.59"
 CHANNEL = "Beta"
-BUILT = "2026-11-07"
+BUILT = "2026-11-08"
 
 APP_NAME = "嗷润吉·联盟采集"
 DEVELOPER = "嗷润吉·1E-6制作"
