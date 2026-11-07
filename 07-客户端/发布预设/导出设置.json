@@ -1,0 +1,17 @@
+{
+ "version": 2,
+ "snap_side": "右侧",
+ "gap": 8,
+ "force_aspect": true,
+ "follow": true,
+ "follow_win": true,
+ "hotkeys": true,
+ "mode": 1,
+ "sections": {
+  "win": true,
+  "data": true,
+  "look": false,
+  "keys": false,
+  "adv": false
+ }
+}

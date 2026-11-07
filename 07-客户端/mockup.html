@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>NIKKE 联盟采集 · 客户端原型 v1</title>
+<style>
+  :root{
+    --bg:#0a0b0e;
+    --scrim:rgba(16,18,22,.82);
+    --surface:rgba(255,255,255,.07);
+    --surface-strong:rgba(255,255,255,.11);
+    --border:rgba(255,255,255,.12);
+    --text:#d6d9de;
+    --dim:#8b9199;
+    --accent:#2f6fd0;
+    --ok:#45b076;
+    --warn:#e0a030;
+    --err:#d9534f;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    background:radial-gradient(1200px 700px at 30% 20%, #171a22 0%, #0a0b0e 60%);
+    font-family:"Microsoft YaHei UI","Segoe UI",sans-serif;
+    color:var(--text);
+    display:flex;align-items:center;justify-content:center;
+    padding:24px;overflow:hidden;
+  }
+  .stage{display:flex;gap:8px;align-items:flex-start}
+
+  /* ───────── 游戏窗口（示意） ───────── */
+  .game{
+    width:760px;height:428px;border-radius:10px;overflow:hidden;position:relative;
+    border:1px solid rgba(255,255,255,.10);
+    box-shadow:0 24px 60px rgba(0,0,0,.55);
+  }
+  .game img{width:100%;height:100%;object-fit:cover;display:block;filter:saturate(.95)}
+  .game .bar{
+    position:absolute;top:0;left:0;right:0;height:26px;
+    background:rgba(12,13,16,.92);border-bottom:1px solid rgba(255,255,255,.08);
+    display:flex;align-items:center;padding:0 10px;gap:8px;font-size:11px;color:var(--dim)
+  }
+  .game .tag{
+    position:absolute;left:12px;bottom:12px;font-size:11px;color:#cfd3d9;
+    background:rgba(10,11,14,.72);border:1px solid var(--border);border-radius:6px;padding:4px 8px
+  }
+
+  /* ───────── 客户端窗口 ───────── */
+  .app{
+    width:444px;height:620px;border-radius:12px;overflow:hidden;
+    background:linear-gradient(180deg,rgba(20,23,29,.86),rgba(14,16,21,.92));
+    backdrop-filter:blur(18px) saturate(120%);
+    border:1px solid var(--border);
+    box-shadow:0 24px 60px rgba(0,0,0,.6), inset 0 1px 0 rgba(255,255,255,.06);
+    display:flex;flex-direction:column;
+  }
+
+  /* 标题栏 */
+  .title{
+    height:40px;flex:0 0 40px;display:flex;align-items:center;gap:8px;padding:0 10px 0 12px;
+    border-bottom:1px solid rgba(255,255,255,.08)
+  }
+  .logo{width:16px;height:16px;border-radius:4px;background:linear-gradient(135deg,#5aa2ff,#2f6fd0)}
+  .title .name{font-size:12.5px;font-weight:600;letter-spacing:.2px}
+  .title .spacer{flex:1}
+  .icon{
+    width:26px;height:26px;border-radius:6px;display:flex;align-items:center;justify-content:center;
+    color:var(--dim)
+  }
+  .icon:hover{background:var(--surface);color:var(--text)}
+  .icon.on{background:rgba(47,111,208,.18);color:#8ab4f8}
+
+  /* 内容区 */
+  .body{padding:12px;display:flex;flex-direction:column;gap:12px;flex:1;min-height:0}
+
+  /* 连接状态卡 */
+  .conn{
+    display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;
+    background:var(--surface);border:1px solid var(--border)
+  }
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 3px rgba(69,176,118,.16);flex:0 0 8px}
+  .conn .who{font-size:12.5px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .conn .who small{display:block;color:var(--dim);font-size:11px;margin-top:2px}
+  .badge{
+    font-size:11px;padding:2px 7px;border-radius:5px;white-space:nowrap;
+    background:rgba(69,176,118,.14);color:#7ed3a3;border:1px solid rgba(69,176,118,.28)
+  }
+  .badge.warn{background:rgba(224,160,48,.14);color:#f0c070;border-color:rgba(224,160,48,.3)}
+
+  /* 分段控件 */
+  .seg{display:flex;background:rgba(255,255,255,.05);border:1px solid var(--border);border-radius:8px;padding:3px;gap:3px}
+  .seg div{flex:1;text-align:center;font-size:12.5px;padding:6px 0;border-radius:6px;color:var(--dim)}
+  .seg div.on{background:var(--surface-strong);color:var(--text);box-shadow:0 1px 0 rgba(255,255,255,.06) inset}
+
+  /* 主操作卡 */
+  .main-card{
+    padding:12px;border-radius:8px;background:var(--surface-strong);border:1px solid var(--border)
+  }
+  .main-card .row1{display:flex;align-items:baseline;gap:8px;margin-bottom:10px}
+  .main-card .h{font-size:13px;font-weight:600}
+  .main-card .m{font-size:11px;color:var(--dim)}
+  .actions{display:flex;gap:8px}
+  .btn{
+    height:32px;border-radius:8px;border:1px solid var(--border);background:rgba(255,255,255,.06);
+    color:var(--text);font-size:12.5px;display:flex;align-items:center;justify-content:center;gap:6px;
+    padding:0 12px;white-space:nowrap
+  }
+  .btn .k{font-size:10.5px;color:var(--dim);border:1px solid var(--border);border-radius:4px;padding:1px 4px}
+  .btn.primary{background:var(--accent);border-color:#3d80e0;color:#fff;height:40px;font-weight:600;flex:1}
+  .btn.primary .k{color:rgba(255,255,255,.75);border-color:rgba(255,255,255,.35)}
+  .btn.ghost{background:transparent}
+
+  /* 表格 */
+  .table-wrap{flex:1;min-height:0;display:flex;flex-direction:column;border:1px solid var(--border);border-radius:8px;overflow:hidden;background:rgba(255,255,255,.03)}
+  table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:12px}
+  thead th{
+    height:28px;font-weight:500;color:var(--dim);font-size:11px;text-align:left;
+    padding:0 6px;border-bottom:1px solid var(--border);background:rgba(255,255,255,.03)
+  }
+  tbody td{height:30px;padding:0 6px;border-bottom:1px solid rgba(255,255,255,.05);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  tbody tr:last-child td{border-bottom:none}
+  tbody tr.new{background:rgba(47,111,208,.16)}
+  tbody tr.new td:first-child{box-shadow:inset 3px 0 0 #5aa2ff}
+  .num{font-family:Consolas,monospace;text-align:right}
+  .ok{color:#7ed3a3}
+  .warn{color:#f0c070}
+
+  /* 进度 */
+  .progress{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--dim)}
+  .track{flex:1;height:4px;border-radius:2px;background:rgba(255,255,255,.09);overflow:hidden}
+  .fill{width:100%;height:100%;background:linear-gradient(90deg,#2f6fd0,#5aa2ff)}
+  .follow{display:flex;align-items:center;gap:4px;color:#8ab4f8}
+
+  /* 日志 */
+  .log{
+    height:64px;border-radius:8px;border:1px solid var(--border);background:rgba(0,0,0,.22);
+    padding:8px 10px;font-size:11px;line-height:17px;color:var(--dim);
+    font-family:Consolas,"Microsoft YaHei UI",monospace;overflow:hidden
+  }
+  .log b{color:#a9b0b9;font-weight:400}
+  .log .t{color:#6d747d}
+
+  /* 右侧：设置抽屉（默认隐藏，示意） */
+  .drawer{
+    width:360px;height:620px;border-radius:12px;padding:14px;opacity:.92;
+    background:linear-gradient(180deg,rgba(22,25,31,.9),rgba(15,17,22,.94));
+    border:1px solid var(--border);box-shadow:0 24px 60px rgba(0,0,0,.55);
+    display:flex;flex-direction:column;gap:12px
+  }
+  .drawer .hd{display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:600}
+  .drawer .hd span{font-size:10.5px;color:var(--dim);font-weight:400}
+  .field{display:flex;align-items:center;gap:10px;font-size:12px;color:var(--dim);padding:9px 10px;border-radius:8px;background:var(--surface);border:1px solid var(--border)}
+  .field b{color:var(--text);font-weight:500;flex:1}
+  .field .val{font-family:Consolas,monospace;font-size:11.5px;color:#a9b0b9}
+  .switch{width:34px;height:18px;border-radius:9px;background:rgba(255,255,255,.14);position:relative;flex:0 0 34px}
+  .switch.on{background:rgba(47,111,208,.75)}
+  .switch i{position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:#fff}
+  .switch.on i{left:18px}
+  .caption{font-size:11px;color:var(--dim);text-align:center;margin-top:10px;line-height:18px}
+  .stage-note{position:absolute;top:18px;left:0;right:0;text-align:center;font-size:11px;color:#5f6670}
+</style>
+</head>
+<body>
+
+<div class="stage">
+  <!-- 游戏窗口示意 -->
+  <div class="game">
+    <img src="../05-工具/测试素材/raid/联盟页_HARD.jpg" alt="游戏窗口"
+         onerror="this.style.display='none';this.parentNode.style.background='linear-gradient(160deg,#20242c,#12141a)'">
+    <div class="bar">
+      <span style="width:12px;height:12px;border-radius:3px;background:#2f6fd0;display:inline-block"></span>
+      胜利女神：新的希望
+    </div>
+    <div class="tag">游戏窗口 · 1920×1080 · 16:9</div>
+  </div>
+
+  <!-- 客户端主界面 -->
+  <div class="app">
+    <div class="title">
+      <div class="logo"></div>
+      <div class="name">联盟采集</div>
+      <div class="spacer"></div>
+      <div class="icon on" title="置顶 F8">⇧</div>
+      <div class="icon" title="对齐 F9">⤢</div>
+      <div class="icon" title="设置 F10">⚙</div>
+      <div class="icon" title="最小化">—</div>
+    </div>
+
+    <div class="body">
+      <div class="conn">
+        <div class="dot"></div>
+        <div class="who">胜利女神：新的希望
+          <small>1920 × 1080 · 已吸附到游戏右侧</small>
+        </div>
+        <div class="badge">16:9 ✓</div>
+      </div>
+
+      <div class="seg">
+        <div>名单</div>
+        <div class="on">伤害</div>
+      </div>
+
+      <div class="main-card">
+        <div class="row1">
+          <div class="h">联盟突袭 · HARD</div>
+          <div class="m">已采 19 条 · 9 人</div>
+        </div>
+        <div class="actions">
+          <div class="btn primary">停止 <span class="k">Esc</span></div>
+          <div class="btn ghost">本屏 <span class="k">F5</span></div>
+          <div class="btn ghost">导出 <span class="k">F7</span></div>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <colgroup>
+            <col style="width:26px"><col style="width:66px"><col style="width:86px">
+            <col style="width:116px"><col style="width:58px"><col style="width:52px">
+          </colgroup>
+          <thead>
+            <tr><th>#</th><th>成员</th><th>BOSS</th><th style="text-align:right">伤害</th><th style="text-align:right">剩余</th><th style="text-align:right">置信</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>14</td><td>小卡卡</td><td>重装火神R</td><td class="num">10,186,020,028</td><td class="num">32.0%</td><td class="num ok">0.996</td></tr>
+            <tr><td>15</td><td>薯KI</td><td>邪魔</td><td class="num">15,829,188,543</td><td class="num">0.0%</td><td class="num ok">0.993</td></tr>
+            <tr><td>16</td><td>DORO</td><td>邪魔</td><td class="num">16,053,352,257</td><td class="num">49.7%</td><td class="num warn">0.975</td></tr>
+            <tr><td>17</td><td>凛酱</td><td>重装火神R</td><td class="num">9,713,247,674</td><td class="num">66.8%</td><td class="num warn">0.868</td></tr>
+            <tr><td>18</td><td>凛酱</td><td>古铁</td><td class="num">9,038,483,654</td><td class="num">86.2%</td><td class="num ok">0.992</td></tr>
+            <tr class="new"><td>19</td><td>凛酱</td><td>铁匠</td><td class="num">9,767,186,202</td><td class="num">93.6%</td><td class="num ok">0.993</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="progress">
+        <div class="track"><div class="fill"></div></div>
+        <div>19 / 19</div>
+        <div class="follow">↓ 已跟随最新</div>
+      </div>
+
+      <div class="log">
+        <div><span class="t">10:40:21</span> <b>自动导航：联盟页 → 联盟突袭 → 联盟记录…</b></div>
+        <div><span class="t">10:40:24</span> 已进入联盟记录页</div>
+        <div><span class="t">10:40:31</span> 拼接 +3 条（位移 2 行，重叠 3/3）</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 设置抽屉（示意：默认隐藏） -->
+  <div class="drawer">
+    <div class="hd">设置 <span>F10 · 默认收起</span></div>
+
+    <div class="field"><b>窗口绑定</b><span class="val">自动 · 按进程名</span></div>
+    <div class="field"><b>强制 16:9</b><span class="switch on"><i></i></span></div>
+    <div class="field"><b>吸附位置</b><span class="val">游戏右侧</span></div>
+    <div class="field"><b>贴边间距</b><span class="val">8 px</span></div>
+    <div class="field"><b>窗口置顶</b><span class="switch on"><i></i></span></div>
+    <div class="field"><b>表格跟随最新</b><span class="switch on"><i></i></span></div>
+    <div class="field"><b>调试面板</b><span class="switch"><i></i></span></div>
+
+    <div class="caption">调试项不出现在主界面<br>只有 F11 / --debug 才展开</div>
+  </div>
+</div>
+
+<script>
+  // 整张原型按视口等比缩放（zoom 会同时改变布局尺寸，不会出现滚动条）
+  (function () {
+    var stage = document.querySelector('.stage');
+    function fit() {
+      var w = stage.offsetWidth + 48, h = stage.offsetHeight + 48;
+      var s = Math.min(1, window.innerWidth / w, window.innerHeight / h);
+      stage.style.zoom = s;
+    }
+    window.addEventListener('resize', fit);
+    fit();
+  })();
+</script>
+</body>
+</html>

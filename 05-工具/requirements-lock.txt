@@ -1,0 +1,51 @@
+# ============================================================================
+# OCR采集 · 依赖锁
+# ----------------------------------------------------------------------------
+# 环境：Windows 10/11 · Python 3.12.13 · venv · pip 24+
+# 用法：
+#   py -3.12 -m venv .venv
+#   .venv\Scripts\python.exe -m pip install -r requirements-lock.txt
+#
+# 分组只为让人一眼看懂"哪个包是干什么的"，pip 会忽略注释。
+# 本文件 = 2026-11-06 可用环境 pip freeze 的全部 28 个包，一个不多一个不少；
+# 换设备照抄即可装出同一套版本。
+# ============================================================================
+
+# ---- 1. 运行时必需：代码里直接 import，少一个就跑不起来
+numpy==2.5.4                    # alliance_ocr.py:51  import numpy as np（像素运算）
+pillow==13.0.0                  # from PIL import Image / ImageDraw / ImageTk
+mss==10.2.0                     # alliance_ocr.py:1199 import mss（屏幕抓取，无传染依赖）
+rapidocr==3.10.0                # alliance_ocr.py:1399 from rapidocr import RapidOCR
+onnxruntime==1.31.1             # rapidocr 的推理后端；代码不直接 import，但缺了引擎起不来
+
+# ---- 2. 上游传递依赖：由上面几个自动带入，锁死版本只为复现，别手删
+opencv-python-headless==5.0.0.93  # rapidocr 内部要 cv2；headless 版不拉 GUI/Qt 依赖
+pyclipper==1.4.0
+shapely==2.2.0
+PyYAML==6.0.3
+six==1.17.0
+tqdm==4.70.1
+omegaconf==2.4.0
+colorlog==6.12.0
+requests==2.34.2                # 下面 4 个是它的依赖
+certifi==2026.10.23
+charset-normalizer==3.5.2
+idna==3.20
+urllib3==2.8.0
+colorama==0.4.6
+flatbuffers==25.12.19           # onnxruntime 的
+protobuf==7.36.2
+packaging==26.3                 # onnxruntime 与 pyinstaller 都要
+
+# ---- 3. 只在打 exe 时用到：跑工具本体不需要，python 打包.py 才需要
+pyinstaller==6.22.3
+pyinstaller-hooks-contrib==2026.9
+altgraph==0.17.5
+pefile==2024.8.26
+pywin32-ctypes==0.2.3
+setuptools==84.2.1
+
+# ---- 4. 系统级，pip 装不到
+# tkinter：随 Python 官方安装包自带（安装时勾 tcl/tk，默认就勾）。
+#          精简发行版 / Microsoft Store 版可能缺 → 报 "No module named tkinter"，
+#          重装官网安装包即可，不要去 pip 装。

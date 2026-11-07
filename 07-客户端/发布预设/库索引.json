@@ -1,0 +1,118 @@
+{
+ "version": 1,
+ "active_roster": "示例",
+ "active_boss": "S19",
+ "rosters": {
+  "示例": {
+   "people": 0,
+   "updated": "2026-11-07 19:56",
+   "note": "出厂空白库"
+  }
+ },
+ "bosses": {
+  "S14": {
+   "count": 5,
+   "updated": ""
+  },
+  "S15": {
+   "count": 5,
+   "updated": ""
+  },
+  "S16": {
+   "count": 5,
+   "updated": ""
+  },
+  "S17": {
+   "count": 5,
+   "updated": ""
+  },
+  "S18": {
+   "count": 5,
+   "updated": ""
+  },
+  "S19": {
+   "count": 5,
+   "updated": ""
+  },
+  "S20": {
+   "count": 5,
+   "updated": ""
+  },
+  "S21": {
+   "count": 5,
+   "updated": ""
+  },
+  "S22": {
+   "count": 5,
+   "updated": ""
+  },
+  "S23": {
+   "count": 5,
+   "updated": ""
+  },
+  "S24": {
+   "count": 5,
+   "updated": ""
+  },
+  "S25": {
+   "count": 5,
+   "updated": ""
+  },
+  "S26": {
+   "count": 5,
+   "updated": ""
+  },
+  "S27": {
+   "count": 5,
+   "updated": ""
+  },
+  "S28": {
+   "count": 5,
+   "updated": ""
+  },
+  "S29": {
+   "count": 5,
+   "updated": ""
+  },
+  "S30": {
+   "count": 5,
+   "updated": ""
+  },
+  "S31": {
+   "count": 5,
+   "updated": ""
+  },
+  "S32": {
+   "count": 5,
+   "updated": ""
+  },
+  "S33": {
+   "count": 5,
+   "updated": ""
+  },
+  "S34": {
+   "count": 5,
+   "updated": ""
+  },
+  "S35": {
+   "count": 5,
+   "updated": ""
+  },
+  "S36": {
+   "count": 5,
+   "updated": ""
+  },
+  "S37": {
+   "count": 5,
+   "updated": ""
+  },
+  "S38": {
+   "count": 5,
+   "updated": ""
+  },
+  "S39": {
+   "count": 5,
+   "updated": ""
+  }
+ }
+}

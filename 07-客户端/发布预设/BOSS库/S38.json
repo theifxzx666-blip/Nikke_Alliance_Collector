@@ -1,0 +1,13 @@
+{
+ "version": 1,
+ "name": "S38",
+ "bosses": [
+  "Porter",
+  "普拉特",
+  "噬天",
+  "重装手指",
+  "秘材H"
+ ],
+ "note": "从旧盟战boss表迁移",
+ "updated": ""
+}
