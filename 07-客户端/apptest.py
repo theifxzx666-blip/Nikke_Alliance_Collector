@@ -1005,6 +1005,19 @@ def main():
     _msg8 = next((f["msg"] for f in _f8 if f["code"] == "成员不在库"), "")
     check("复核：相似度太低就不瞎猜", "最像" not in _msg8, _msg8)
 
+    # ---------------- 5x. v1.30：补全要落回引擎自己的行
+    # 真机 22:09：引擎喊「第 57 条缺字段」，复核却说「没发现互相对不上的地方」——
+    # 同一份数据两个说法，因为补全只改了发给界面的副本。
+    _e6 = _Engine()
+    _e6._bosses = _B
+    _live = [{"member": "甲", "boss": "", "damage": 1, "pct": "10.0%", "conf": 0.9},
+             {"member": "甲", "boss": "铁匠", "damage": 2, "pct": "20.0%", "conf": 0.9}]
+    _e6.emit_rows(_live)
+    check("补全写回引擎自己的行（收工自检才不会误报缺字段）",
+          _live[0]["boss"] == "铁匠", str(_live[0]))
+    check("降分只在发出去的那份副本上（patch 判定要用原始分）",
+          _live[1]["conf"] == 0.9, str(_live[1]["conf"]))
+
     # 键名不再写死 F2
     check("提示文案取当前键位（F7）", KEYS.current("attach") == "F7",
           KEYS.current("attach"))

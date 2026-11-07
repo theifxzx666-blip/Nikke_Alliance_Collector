@@ -49,15 +49,21 @@ class Engine(QObject, CaptureEngine):
     # 闭集比对是这里最硬的依据。
     _HOW_SCORE = {"exact": 1.0, "包含": 0.90, "形近": 0.60, "相似": 0.65}
 
-    def _finalize(self, rows):
-        """归一 BOSS 名、按归一的确定性下调置信度、回填能确定的本期 BOSS。
+    def _fill_known(self, rows):
+        """原地补全：BOSS 闭集归一 + 缺 BOSS 按同成员唯一值回填。
 
-        只改传进来的这一份副本 —— `capture` 内部还要拿原始行做补全与 patch
-        判定，那里的 `conf` 必须是识别分数本身，不能被这里的降分污染。
+        返回 `{id(行): 归一依据}`，只对**被归一过的行**有值 —— 调用方据此决定
+        要不要把置信度降下来。
+
+        **为什么原地改引擎自己的 rows**：`capture` 收工时拿这份数据做自检
+        （"第 N 条缺字段"），复核又把同一批数据给界面看。以前这里只改副本，
+        结果是引擎喊"第 57 条缺字段"、复核说"没发现问题"—— 同一份数据两个说法。
+        回填是**确定性的**（同成员只有一个 BOSS 才补），引擎拿它做自检才合理。
         """
+        hows = {}
         bosses = [b for b in (self._bosses or []) if b]
         if not bosses:
-            return rows
+            return hows
         for r in rows:
             raw = (r.get("boss") or "").strip()
             if not raw:
@@ -69,11 +75,7 @@ class Engine(QObject, CaptureEngine):
             note = r.get("boss_note") or ""
             r["boss_note"] = (f"{note} · 闭集归一到「{canon}」（{how}）"
                               if note else f"闭集归一到「{canon}」（{how}）")
-            # 归一越勉强，这一行越不该跟"一眼读对"的行享受同一个分数。
-            # 以前只改名字不改分，界面上完全看不出哪几条是猜出来的。
-            ceiling = self._HOW_SCORE.get(how, 0.6)
-            old = r.get("conf")
-            r["conf"] = round(ceiling if old is None else min(float(old), ceiling), 3)
+            hows[id(r)] = how
 
         # 缺 BOSS 的行：**同一成员在本份数据里只有唯一 BOSS** 时才回填。
         # 不按"上一行/下一行"猜 —— 一个人打两刀不同 BOSS 是常态。
@@ -89,11 +91,37 @@ class Engine(QObject, CaptureEngine):
             if len(cand) == 1:
                 r["boss"] = next(iter(cand))
                 r["boss_note"] = "同一成员其它行回填"
-        return rows
+        return hows
+
+    def _apply_score(self, rows, hows):
+        """按归一依据下调置信度，返回**副本**（不动入参）。"""
+        out = []
+        for r in rows:
+            d = dict(r)
+            how = hows.get(id(r))
+            if how:
+                ceiling = self._HOW_SCORE.get(how, 0.6)
+                old = d.get("conf")
+                d["conf"] = round(ceiling if old is None else min(float(old), ceiling), 3)
+            out.append(d)
+        return out
+
+    def _finalize(self, rows):
+        """补全 + 降分一次做完（自检与单测用）。返回副本。"""
+        return self._apply_score(rows, self._fill_known(rows))
 
     def emit_rows(self, rows):
-        # 发射前统一过 `_finalize`：这是所有行（首屏 / 拼接 / 补全）的唯一出口
-        self.rowsChanged.emit(self._finalize([dict(r) for r in rows]))
+        """所有行（首屏 / 拼接 / 补全）的唯一出口。
+
+        两步走，因为引擎和界面要的不是同一样东西：
+        · **引擎的 rows 原地补全** —— `capture` 收工自检要用它（不补的话会喊
+          "第 N 条缺字段"，而界面上那条其实已经补好了，同一份数据两个说法）；
+        · **发给界面的副本按归一下调置信度** —— 归一越勉强，这条越不该跟
+          一眼读对的行享受同一个分数。降分只影响展示与导出，不回灌引擎，
+          否则 `patch` 判定拿降过分去比新旧读数就不公平了。
+        """
+        hows = self._fill_known(rows)
+        self.rowsChanged.emit(self._apply_score(rows, hows))
 
     def emit_done(self):
         self.finished.emit()
