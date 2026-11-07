@@ -2222,7 +2222,8 @@ class Shell(QWidget):
         self.picker = RegionPicker(scr)
         self.picker.picked.connect(self._on_picked)
         self.picker.show()
-        self.say("框选：拖出卡片列表范围（顶部日期栏/滚动条不要框进来 · Esc 取消）")
+        self.say("框选：从头像左边缘拖到伤害数字右边缘（至少 4~5 行）；"
+                 "顶部日期栏和滚动条不要框进来 · Esc 取消")
 
     def _on_picked(self, rect):
         try:
@@ -2230,12 +2231,25 @@ class Shell(QWidget):
         except Exception as e:
             self.say(str(e))
             return
+        # v1.50：**坐标系不一致**。`engine.region()` 给的是 Win32 物理像素，
+        # 而 RegionPicker emit 的 QRect 是 Qt 逻辑坐标 —— 高 DPI（150%/200%）下
+        # 差一个 devicePixelRatio。不换算的话比例会缩成 1/dpr：
+        # 实测 200% 屏上用户框了 40% 宽，记下来只有 19%，采出来 0 条。
+        _dpr = float(self.devicePixelRatio() or 1.0)
+        rx0, ry0 = rect.x() * _dpr, rect.y() * _dpr
+        rx1, ry1 = rect.right() * _dpr, rect.bottom() * _dpr
         w, h = max(1, x1 - x0), max(1, y1 - y0)
-        rel = ((rect.x() - x0) / w, (rect.y() - y0) / h,
-               (rect.right() - x0) / w, (rect.bottom() - y0) / h)
+        rel = ((rx0 - x0) / w, (ry0 - y0) / h,
+               (rx1 - x0) / w, (ry1 - y0) / h)
         rel = tuple(round(min(1.0, max(0.0, v)), 4) for v in rel)
-        if rel[2] - rel[0] < 0.05 or rel[3] - rel[1] < 0.05:
-            self.say("框太小了，忽略这次框选")
+        # v1.49：框太小直接拒。原来只挡 5%，可卡片列表正常是 40% 宽 × 80% 高，
+        # 用户实测框到 19% 宽就把「伤害」整列扔在框外 → locate 找不到完整卡片 →
+        # 「这一屏没认到记录，收工」0 条。宁可当场说清楚，也别让他采完才发现。
+        _w, _h = rel[2] - rel[0], rel[3] - rel[1]
+        if _w < 0.30 or _h < 0.50:
+            self.say(f"框太小了（宽 {_w:.0%} · 高 {_h:.0%}）—— 卡片列表正常约 "
+                     f"40% 宽 × 80% 高。要框到「头像左边缘 → 伤害数字右边缘」，"
+                     f"至少 4~5 行", "WARN")
             return
         self.engine.rect_rel = rel
         self._save_rect(rel)

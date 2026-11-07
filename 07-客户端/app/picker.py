@@ -29,7 +29,8 @@ class RegionPicker(QWidget):
         p.drawPixmap(0, 0, self._bg)
         p.fillRect(self.rect(), QColor(8, 10, 14, 150))
 
-        tip = "拖动框住「卡片列表」：第一张卡上沿 → 最后一张下沿 · 顶部日期栏/滚动条不要框进来 · Esc 取消"
+        tip = ("从「头像左边缘」拖到「伤害数字右边缘」，至少 4~5 行 · "
+               "顶部日期栏和滚动条不要框进来 · Esc 取消")
         p.setPen(QColor(255, 224, 102))
         p.drawText(24, 30, tip)
 
