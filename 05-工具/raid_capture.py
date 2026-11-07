@@ -134,6 +134,7 @@ class CaptureEngine:
                 # 不继承的话最终排序会把它们全甩到 9999 那一档的末尾。
                 rec.setdefault("_pass", rows[pos].get("_pass", 9999))
                 rec["_y"] = int(rows[pos].get("_y") or 0) - 1      # 排在锚点前面
+                rec.setdefault("_gy", (int(rows[pos].get("_gy") or 0) or 1 << 29) - 1)
                 rows.insert(pos, rec)
                 return
         for prv in reversed(recs[:idx]):
@@ -141,6 +142,7 @@ class CaptureEngine:
             if pos is not None:
                 rec.setdefault("_pass", rows[pos].get("_pass", 9999))
                 rec["_y"] = int(rows[pos].get("_y") or 0) + 1      # 排在锚点后面
+                rec.setdefault("_gy", (int(rows[pos].get("_gy") or 0) or 1 << 29) + 1)
                 rows.insert(pos + 1, rec)
                 return
         rows.insert(min(max(0, base + idx), len(rows)), rec)
@@ -446,10 +448,17 @@ class CaptureEngine:
                     img = self._crop(raw)
             except Exception:
                 A.log_exc("hard-top")
+            # v1.52：从列表顶部起累计滚过的像素。每条记录的全局位置 = 这个 + 屏内 y，
+            # 排序只认物理坐标，不再依赖"第几屏第一次看到"（那个会因漏行而偏）。
+            _offset = 0
             for i in range(MAX_SCREENS):
                 if self._stop.is_set():
                     break
                 recs, loc = read_hard(img, eng, self._roster, self._bosses)
+                # v1.52：全局物理位置 = 从顶部起累计滚动量 + 屏内纵坐标。
+                # 这一行滚到哪一屏，这个值都不变 —— 所以排序不会被"第几屏才看到"带偏。
+                for _r in recs:
+                    _r["_gy"] = _offset + int(_r.get("_y") or 0)
                 if not loc.cards:
                     self.say("这一屏没认到记录，收工")
                     break
@@ -573,6 +582,8 @@ class CaptureEngine:
                         self.say(f"补回 {len(lost)} 条被位移跳过的行（已插回原位）")
                     last_rows = recs
                     fixed = len(info.get("patch") or [])
+                    if shift:
+                        _offset += abs(int(shift))       # v1.52 累计滚过的像素
                     self.say(f"拼接 +{info.get('added', 0)} 条（位移 {info.get('shift_rows')} 行，"
                              f"重叠 {info.get('hit')}/{info.get('overlap')}"
                              + (f" · 修正 {fixed} 条边缘读数" if fixed else "") + "）")
@@ -661,7 +672,11 @@ class CaptureEngine:
             # "插到第几个"的推算。滚 2 行、重叠 4 行 → 每条首次出现的屏号单调递增；
             # 同屏内 OCR 直接给的顺序最可靠。补回/回扫怎么插都不影响最终结果。
             if rows:
-                rows.sort(key=lambda r: (int(r.get("_pass", 9999)), int(r.get("_y") or 0)))
+                # v1.52：按**全局物理位置**排，不再按屏号。屏号会因漏行而偏，
+                # 滑得越多偏得越狠（用户："越滑越容易出现排序错误"）。
+                rows.sort(key=lambda r: (int(r.get("_gy") or 1 << 30),
+                                         int(r.get("_pass", 9999)),
+                                         int(r.get("_y") or 0)))
             _rows = rows or []
             _cnt = {}
             for _r in _rows:
