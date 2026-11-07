@@ -30,19 +30,21 @@ class CaptureEngine:
     # 拖动**步长**固定 3px（名单采集实测值），**步间隔**三档自适应（v1.59）。
     # 单屏 3.32s 里拖动占 2.12s，速度是唯一大杠杆：107px/s → 176px/s。
     # 10:01 那轮"试用大步 286px/s"之所以失败，是因为当时相关峰恒为 0，
-    # 测到的 188px 是松手后惯性途中的假读数。现在 `_shift_by_template` 能给出
-    # 真实位移，闭环校验成立 —— 前提变了，结论才敢变。
+    # 测到的 188px 是松手后惯性途中的假读数。现在 `_offset_from_content`
+    # 能给出真实位移（重叠行反算），闭环校验才成立 —— 前提变了，结论才敢变。
     DRAG_STEP = A.DRAG_STEP_PX
     GAPS = (A.DRAG_STEP_GAP, 0.022, 0.017)     # 107 / 136 / 176 px/s
     DRAG_GAP = GAPS[0]                          # 起始档 = v1.58 原值，兼容旧引用
     # 每次滚多少行。2.5 → 2.0（v1.36）：5 轮真实样本里 165 人次漏了 7 条，
     # 全落在"步长偏了半行、边界行被两屏各裁一半"这种位置。滚 2 行时重叠 4 行，
     # 边界行在两屏都是完整行。代价是拖动次数 +25%（记录页 26 → 33 次，约 +30 秒）。
-    # v1.59 曾放到 2.5，真机 05:27 一轮立刻复现同一件事：半行偏移让上下沿各留一张
-    # 残片，两条 conf 0.35/0.65 的垃圾行夹在正常记录中间（98 条 / 34 人）。
-    # **行距必须整数倍** —— 这不是速率问题，是"卡片会不会被切成两半"的结构问题。
-    SCROLL_ROWS = 2.0
-    SCROLL_ROWS_MIN = 2.0                       # 重叠变薄时的退守值（现在两者相同）
+    # v1.59.2：2.0 → 3.0。3 是行距整数倍（不切半张卡），屏数 48 → 34，
+    # 重叠还剩 3 条 —— 正好是 `_offset_from_content` 的最低票数（≥2）之上一点。
+    # 闸门两道：`_pick_rows` 要求认全 ≥5 条且重叠 ≥3 才用上限；
+    # `_rows_for_view` 再按框高裁一刀，够不到 258px 就自动退回 2.0。
+    # ⚠ 永远不要用 2.5 / 3.5 这种非整数倍（05:27 实测出过 2 条半行残片）。
+    SCROLL_ROWS = 3.0
+    SCROLL_ROWS_MIN = 2.0                       # 重叠变薄 / 框太矮时的退守值
 
     # 给调试面板看的现场快照（不算逻辑，只是留档）
     last_pitch = 0.0
@@ -133,6 +135,25 @@ class CaptureEngine:
         except Exception:
             pass
         return True
+
+    @classmethod
+    def _rows_for_view(cls, view_h, pitch, want):
+        """这个框高实际能整行滚几行。够不到就退回整数下限。
+
+        为什么必须算这一步：`_drag_list` 的落点是
+        `y_from = y0 + h*0.55` → `y_to = max(y0+12, y_from - dist)`，
+        框矮时 `dist` 会被 12px 上边距截短。截出来的距离往往不是行距整数倍
+        —— 那就又变成"卡片停在半行位置"，和 2.5 行一样的残片来源。
+
+        框高 550 / 行距 86：可达 290px → 3 行 ✓
+        框高 480 / 行距 86：可达 252px → 只够 2 行，退回 2.0
+        """
+        try:
+            max_px = float(view_h) * 0.55 - 12.0
+            rows = int(max_px // float(pitch)) if pitch else 2
+        except Exception:
+            rows = 2
+        return float(max(2, min(int(want), rows)))
 
     @classmethod
     def _pick_rows(cls, n_recs, n_hit, good):
@@ -967,6 +988,10 @@ class CaptureEngine:
                     _hit = len(recs) - _add
                     _rows_now, self._rows_good = self._pick_rows(
                         len(recs), _hit, self._rows_good)
+                    # 第二道闸：框高够不到整数倍时退回 2.0，别让 dist 被 12px
+                    # 上边距截成非整数行（那等于又滚了个 2.7 行 = 半张卡）。
+                    _sr = self._scroll_region(region)
+                    _rows_now = self._rows_for_view(_sr[3] - _sr[1], pitch, _rows_now)
                     self.last_splice = {"added": _add, "hit": _hit,
                                         "overlap": len(recs), "patch": [],
                                         "shift_rows": _moved}

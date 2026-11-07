@@ -448,6 +448,10 @@ class _Scroll(CE):
     def _scroll_to_top(self, region, pitch):
         return None                # 仿真里画面本来就在顶部
 
+    def _scroll_region(self, region):
+        # 给一个够高的"框"，让 `_rows_for_view` 允许滚 3 行（真机框高 550 左右）
+        return (0, 0, 600, int(_VIEW_H))
+
     def _drag_list(self, region, dist, up=False):
         self.dists.append(dist)
         self.off += dist
@@ -471,8 +475,8 @@ def _read(img, eng, roster=None, bosses=None):
         if abs(img.off - 200.0) < 1 and d["member"] == "人4":
             d["member"] = "人4x"
             d["conf"] = 0.55
-        # 滚到 450px 那一帧少读一条（模拟边缘被裁）
-        if abs(img.off - 450.0) < 1 and d["member"] == "人7":
+        # 滚到 400px 那一帧少读一条（模拟边缘被裁）
+        if abs(img.off - 400.0) < 1 and d["member"] == "人7":
             continue
         out.append(d)
     return out, _Loc(len(out))
@@ -499,12 +503,21 @@ check("滚动采集：每条位置落在真值 1 行内",
 check("读歪的那份观测被同一位置的好读数盖掉",
       all((r.get("conf") or 0) >= 0.9 for r in _rows),
       str([(r["member"], r["conf"]) for r in _rows if (r.get("conf") or 0) < 0.9]))
-# v1.59.1 步长锁在 2.0（行距整数倍）。这一段验的是"闸门本身的逻辑"：
-# 达标返回上限、不达标返回下限并清零。改 SCROLL_ROWS 试 3.0 行时这些断言跟着走。
-check("步长自适应：全程 2.0 行（行距整数倍，不留半行残片）",
-      all(abs(d - 200) < 1 for d in _sc.dists if d < 300), str(_sc.dists))
+# v1.59.2 步长上限放到 3.0（仍是行距整数倍）。这一段验三件事：
+# 起步保守用 2.0、稳定后升到 3.0、框太矮时自动退回 2.0（别被截成非整数行）。
+check("步长自适应：起步 2.0、稳定后 3.0（都是整数倍）",
+      _sc.dists[:2] == [200, 200] and any(abs(d - 300) < 1 for d in _sc.dists),
+      str(_sc.dists))
 check("步长自适应：到底重试才加大到上限", any(d >= 400 for d in _sc.dists),
       str(_sc.dists))
+check("框高够：550px 认 3 行", CE._rows_for_view(550, 86, 3.0) == 3.0,
+      str(CE._rows_for_view(550, 86, 3.0)))
+check("框高不够：480px 只认 2 行（258px 够不到）",
+      CE._rows_for_view(480, 86, 3.0) == 2.0, str(CE._rows_for_view(480, 86, 3.0)))
+check("框很矮：300px 也不低于 2 行", CE._rows_for_view(300, 86, 3.0) == 2.0,
+      str(CE._rows_for_view(300, 86, 3.0)))
+check("框够高也不越过想要的 2.0", CE._rows_for_view(700, 86, 2.0) == 2.0,
+      str(CE._rows_for_view(700, 86, 2.0)))
 
 # --- 内容定位：像素位移完全不可用时，坐标仍然必须准
 _loc_rows = []
