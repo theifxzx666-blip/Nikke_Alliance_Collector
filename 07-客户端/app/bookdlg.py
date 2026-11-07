@@ -6,12 +6,13 @@
 错误（空名、非法字符、重名、删活动套）一律就地弹提示，不关闭、不静默改字。
 """
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QDialog, QHBoxLayout, QInputDialog, QLabel,
-                               QListWidget, QListWidgetItem, QMessageBox,
+from PySide6.QtWidgets import (QDialog, QFileDialog, QHBoxLayout, QInputDialog,
+                               QLabel, QListWidget, QListWidgetItem, QMessageBox,
                                QPlainTextEdit, QPushButton, QVBoxLayout)
 
 import booklib as BK
 
+from . import paths as P
 from . import theme as T
 
 
@@ -23,7 +24,7 @@ class BookDialog(QDialog):
         self.kind = kind
         self.changed = False                 # 关闭后 shell 据此重载下拉
         self.setWindowTitle("成员库管理" if kind == "roster" else "BOSS 库管理")
-        self.setMinimumWidth(470)
+        self.setMinimumWidth(560)
         self.setStyleSheet(T.qss())
 
         lay = QVBoxLayout(self)
@@ -61,6 +62,14 @@ class BookDialog(QDialog):
         if kind == "boss":
             b = QPushButton("保存编辑")
             b.clicked.connect(self._save_edit)
+            row.addWidget(b)
+        else:
+            # v1.31：手工补名单的回路。导出的 CSV 以前只是快照，用户改完等于白改。
+            b = QPushButton("导入 CSV…")
+            b.setToolTip("把成员名单 CSV 里的昵称并进选中的库（只增不删）。\n"
+                         "导出一份 → 在 Excel 里补几个真名 → 存成 CSV（GBK 或 UTF-8 都行）→ 从这里导回来")
+            b.setProperty("role", "sub")
+            b.clicked.connect(self._import_csv)
             row.addWidget(b)
         row.addStretch(1)
         close = QPushButton("关闭")
@@ -194,6 +203,43 @@ class BookDialog(QDialog):
             return
         self.changed = True
         self._refresh()
+
+    def _import_csv(self):
+        """把导出的名单 CSV（手改过）并回选中的库。
+
+        以前导出的 CSV 只是快照：用户补上漏掉的真名，工具根本不回读，
+        改完等于白改。这里只补人，不删人 —— 导入是用来补漏的，不是用来覆盖的。
+        """
+        name = self._selected()
+        if not name:
+            QMessageBox.information(self, "先选一个库",
+                                    "在上面选一套库，导入的名单会并进它（不会删掉已有的）")
+            return
+        start = str(P.sub(P.ROSTER))
+        p, _ = QFileDialog.getOpenFileName(
+            self, f"导入到「{name}」", start, "CSV 文件 (*.csv);;所有文件 (*)")
+        if not p:
+            return
+        try:
+            added, exist, skip, err = BK.import_roster_csv(p, name)
+        except Exception as e:
+            QMessageBox.warning(self, "导入失败", f"{e}")
+            return
+        if err:
+            QMessageBox.warning(self, "导入失败", err)
+            return
+        if not added:
+            QMessageBox.information(
+                self, "没有新增",
+                f"表里的 {exist} 个人库里都已经有了，跳过 {skip} 行（空行 / 纯数字）。")
+            return
+        self.changed = True
+        self._refresh(name)
+        total = len((BK.read_roster(name).get("names") or {}))
+        QMessageBox.information(
+            self, "导入完成",
+            f"新增 {added} 人 · 已有 {exist} 人 · 跳过 {skip} 行\n"
+            f"「{name}」现在 {total} 人。")
 
     def _save_edit(self):
         name = self._selected()

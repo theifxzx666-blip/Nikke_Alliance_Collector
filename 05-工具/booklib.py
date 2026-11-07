@@ -149,6 +149,75 @@ def set_active_boss(name: str) -> bool:
 
 # ---------------------------------------------------------------- 列目录
 
+def import_roster_csv(path, book=None) -> tuple:
+    """把一个成员名单 CSV 并进库（**只增不删**）。返回 `(新增, 已存在, 跳过, 错误)`。
+
+    场景：导出一份名单 → 在 Excel 里手工补上几个漏掉的真名 → 导回来。
+    以前这条路走不通 —— 导出的 CSV 只是快照，工具从不回读，用户改完等于白改。
+
+    · 只认「昵称」列（也接受 成员 / 名字 / name），序号与置信度一律忽略：
+      手改过的表里这两列经常对不上，拿来判断只会添乱；
+    · 编码自动探测：工具自己导出的是 UTF-8-BOM，Excel 另存会变成 GBK 或 UTF-16；
+    · 合并是**并集**：库里有但 CSV 里没有的一个都不删 —— 导入只用来补漏。
+    """
+    import csv as _csv
+
+    p = Path(path)
+    if not p.is_file():
+        return 0, 0, 0, "文件不存在"
+    rows = None
+    for enc in ("utf-8-sig", "gbk", "utf-16", "utf-16-le"):
+        try:
+            with open(p, encoding=enc, newline="") as f:
+                rows = list(_csv.reader(f))
+            break
+        except (UnicodeDecodeError, UnicodeError):
+            continue
+    if rows is None:
+        return 0, 0, 0, "读不出编码（试过 UTF-8 / GBK / UTF-16）"
+    if not rows:
+        return 0, 0, 0, "文件是空的"
+
+    def _cell(v):
+        return str(v or "").replace("\u3000", " ").strip()
+
+    head = [_cell(c) for c in rows[0]]
+    col, start = 0, 0
+    for i, h in enumerate(head):
+        if any(k in h.lower() for k in ("昵称", "成员", "名字", "member", "name")):
+            col, start = i, 1
+            break
+    else:
+        # 没有表头：第一行就当天数据。取数量最多的那一列没意义，
+        # 用户手写的单列清单就是最常见的形式。
+        pass
+
+    d = read_roster(book)
+    names = d.setdefault("names", {})
+    added = exist = skip = 0
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    for r in rows[start:]:
+        n = _cell(r[col]) if col < len(r) else ""
+        # 空行、重复表头、纯序号（Excel 里常见的 1/2/3）都不算名字
+        if not n or n in ("昵称", "成员", "名字", "序号") or n.isdigit():
+            skip += 1
+            continue
+        if n in names:
+            exist += 1
+            continue
+        # 手工补的：当作见过一轮，分数给满 —— 用户确认过的人不需要再被怀疑
+        names[n] = {"first": now, "last": now, "rounds": 1, "miss": 0,
+                    "score": 1.0, "alias": []}
+        added += 1
+
+    if not added:
+        return 0, exist, skip, ""
+    target = book or active_roster() or "默认"
+    if not write_roster(target, d, activate=False):
+        return 0, exist, skip, f"写入「{target}」失败（目录权限？）"
+    return added, exist, skip, ""
+
+
 def list_rosters() -> list:
     """[{name, people, updated, active}]，按名片数从多到少。"""
     idx = load_index()

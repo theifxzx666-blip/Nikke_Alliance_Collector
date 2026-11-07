@@ -143,6 +143,43 @@ def test_broken(root: Path):
     B.write_roster("嗷润吉-Q区", {"names": {"好人": {}}})
 
 
+def test_import(root: Path):
+    """v1.31：从成员名单 CSV 补人。用户手工改完名单要能回库。"""
+    print("\n--- 从 CSV 导入成员 ---")
+    B.write_roster("导入库", {"version": 1, "rounds": 0,
+                              "names": {"已有": {"score": 1.0, "alias": []}}})
+    # GBK：Excel 另存 CSV 的常见编码
+    p1 = root / "gbk.csv"
+    p1.write_text("序号,昵称,置信度\n1,已有,1\n2,新来的,1\n3,,0.9\n4,12345,1\n",
+                  encoding="gbk")
+    r1 = B.import_roster_csv(p1, "导入库")
+    check("GBK 表读得出来，只补进来一个", r1[:2] == (1, 1), str(r1))
+    names = B.read_roster("导入库")["names"]
+    check("新增的人进了库", "新来的" in names, str(list(names)))
+    check("空行与纯数字被跳过", len(names) == 2, str(list(names)))
+    check("索引人数跟着更新",
+          B.load_index()["rosters"]["导入库"]["people"] == 2, "")
+
+    # UTF-8-BOM：工具自己导出的格式
+    p2 = root / "bom.csv"
+    p2.write_text("序号,昵称,置信度\n1,第二个,1\n", encoding="utf-8-sig")
+    check("UTF-8-BOM 也读得出来", B.import_roster_csv(p2, "导入库")[0] == 1, "")
+    check("导入只增不删（已有的还在）",
+          len(B.read_roster("导入库")["names"]) == 3, "")
+
+    # 没有表头的单列清单
+    p3 = root / "plain.csv"
+    p3.write_text("手写的甲\n手写的乙\n", encoding="utf-8")
+    check("无表头的单列清单也能导",
+          B.import_roster_csv(p3, "导入库")[0] == 2, "")
+
+    added, exist, skip, err = B.import_roster_csv(p1, "导入库")
+    check("一个都不新增时给计数、不报错",
+          added == 0 and exist == 2 and not err, f"{added}/{exist}/{skip}")
+    check("文件不存在时给错误说明",
+          B.import_roster_csv(root / "没这个.csv", "导入库")[3] != "", "")
+
+
 def main():
     root = Path(tempfile.mkdtemp(prefix="booktest_"))
     print(f"临时根：{root}\n")
@@ -151,6 +188,7 @@ def main():
     test_switch_and_save(root)
     test_boss(root)
     test_broken(root)
+    test_import(root)
     print(f"\n结果：{OK} 通过 · {FAIL} 失败")
     return 1 if FAIL else 0
 
