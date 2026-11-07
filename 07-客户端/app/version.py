@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """版本与项目信息。改版本只改这里，关于窗口和标题徽标都读它。"""
 
-VERSION = "1.27"
+VERSION = "1.28"
 CHANNEL = "Beta"
 BUILT = "2026-11-07"
 

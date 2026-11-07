@@ -49,7 +49,8 @@ def export_dir() -> Path:
     return P.sub(P.DAMAGE)
 
 
-def export_rows(rows, boss_book: str = "", roster_book: str = "") -> Path:
+def export_rows(rows, boss_book: str = "", roster_book: str = "",
+                review=None) -> Path:
     """把记录写成 CSV，返回落盘路径。
 
     文件名按 v1.18 规范：`{BOSS库}{成员库}_伤害统计_{时间}.csv`
@@ -57,17 +58,24 @@ def export_rows(rows, boss_book: str = "", roster_book: str = "") -> Path:
 
     缺字段的条目**照常导出**并单独返回下标 —— 留空比编一个值安全，
     但必须让人一眼看到该核哪几条。
+
+    `review`（v1.28）：`{序号: 原因}`，传了就多一列「复核」，把整表复核
+    （`reviewer.review`）的结论写进去。传 `None` 保持旧格式（名单导出等不走这里）。
     """
     if not rows:
         raise ValueError("还没有数据")
     out = P.sub(P.DAMAGE) / P.damage_file(boss_book, roster_book)
+    notes = review or {}
     with open(out, "w", newline="", encoding="utf-8-sig") as f:
         w = csv.writer(f)
-        w.writerow(HEADER)
+        w.writerow(HEADER + ("复核",) if review is not None else HEADER)
         for i, r in enumerate(rows, 1):
-            w.writerow([i, r.get("member") or "", r.get("boss") or "",
-                        r.get("damage_raw") or "", r.get("pct") or "",
-                        "" if r.get("conf") is None else r["conf"]])
+            line = [i, r.get("member") or "", r.get("boss") or "",
+                    r.get("damage_raw") or "", r.get("pct") or "",
+                    "" if r.get("conf") is None else r["conf"]]
+            if review is not None:
+                line.append(notes.get(i, ""))
+            w.writerow(line)
     save_settings(last_export=str(out))
     return out
 

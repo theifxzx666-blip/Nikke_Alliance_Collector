@@ -947,6 +947,42 @@ def main():
     check("没配 BOSS 库时原样返回",
           _Engine()._finalize([{"boss": "感医师思"}])[0]["boss"] == "感医师思", "")
 
+    # ---------------- 5v. v1.28：整表复核（只标记不改数据）
+    from app import reviewer as _RV
+    _rr = [
+        {"member": "甲", "boss": "邪魔", "damage": 100, "pct": "50.0%"},
+        {"member": "甲", "boss": "邪魔", "damage": 100, "pct": "50.0%"},
+        {"member": "乙", "boss": "", "damage": None, "pct": ""},
+        {"member": "丙", "boss": "香装", "damage": 2000, "pct": "20.0%"},
+        {"member": "丙", "boss": "古铁", "damage": 9000, "pct": "10.0%"},
+    ]
+    _rf, _rs = _RV.review(_rr, _B, None)
+    _codes = {f["code"] for f in _rf}
+    check("复核：缺字段", "缺字段" in _codes, str(_codes))
+    check("复核：BOSS 不在本期", "BOSS 不在本期" in _codes, str(_codes))
+    check("复核：完全相同的两条算重复嫌疑", "重复嫌疑" in _codes, str(_codes))
+    check("复核：只标记不改数据",
+          _rr[2]["boss"] == "" and _rr[2]["damage"] is None, str(_rr[2]))
+    check("复核摘要带条数与分类", "5 条" in _RV.summary_line(_rs), _RV.summary_line(_rs))
+    check("复核按行输出供 CSV 使用", isinstance(_RV.by_row(_rf).get(3), str), "")
+
+    _f4, _ = _RV.review([{"member": "丁", "boss": "邪魔", "damage": 1, "pct": p}
+                         for p in ("50.0%", "70.0%", "30.0%")], _B, None)
+    check("复核：血量不单调", any(f["code"] == "血量不单调" for f in _f4),
+          str([f["code"] for f in _f4]))
+    _f5, _ = _RV.review([{"member": "陌生", "boss": "邪魔", "damage": 5, "pct": "9.0%"}],
+                        _B, {"names": {"老王": {}}})
+    check("复核：成员不在库", any(f["code"] == "成员不在库" for f in _f5), "")
+    _f6, _ = _RV.review([{"member": "戊", "boss": "邪魔", "damage": d, "pct": f"{p}%"}
+                         for d, p in ((1000, 80), (1200, 60), (4800, 40))], _B, None)
+    check("复核：同一人对同一 BOSS 差 3 倍 → 伤害异常",
+          any(f["code"] == "伤害异常" for f in _f6), str([f["code"] for f in _f6]))
+    check("复核：跨成员不判伤害异常（练度不同是常态）",
+          not any(f["code"] == "伤害异常" for f in _RV.review(
+              [{"member": "甲", "boss": "邪魔", "damage": 100, "pct": "9.0%"},
+               {"member": "乙", "boss": "邪魔", "damage": 900, "pct": "9.0%"}],
+              _B, None)[0]), "")
+
     # 键名不再写死 F2
     check("提示文案取当前键位（F7）", KEYS.current("attach") == "F7",
           KEYS.current("attach"))

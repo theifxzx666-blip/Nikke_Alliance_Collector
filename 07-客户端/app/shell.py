@@ -32,6 +32,7 @@ import booklib as BK
 from . import icons as IC
 from . import paths as P
 from . import keys as KEYS
+from . import reviewer as RV
 from . import store as S
 from . import theme as T
 from . import version as V
@@ -174,6 +175,8 @@ class Shell(QWidget):
         self._rows = []              # 当前页签视图对应的行（导出/按钮复用）
         self._rows_hard = []         # 伤害采集的行（真源）
         self._rows_roster = []       # 名单库视图的行（真源）
+        self._review_findings = []   # 整表复核的结论（v1.28，只读不改数据）
+        self._review_summary = {}
         self._follow = bool(self.cfg.get("follow", True))
         self._seen = 0
         self._restoring = False
@@ -1480,6 +1483,10 @@ class Shell(QWidget):
     def _set_running(self, run: bool):
         was = self._running
         self._running = run
+        if run:
+            # 新一轮开始：上一轮的复核结论必须清掉，否则会贴到新数据上
+            self._review_findings = []
+            self._review_summary = {}
         self._sync_primary()          # 文案 + run/warn 两个配色属性一起刷
         hard = self._mode == 1
         for b in (self.btn_shot, self.btn_pick):
@@ -2050,6 +2057,43 @@ class Shell(QWidget):
 
     def _on_done(self):
         self._set_running(False)
+        if self._mode == 1:
+            self._review_hard()
+
+    def _review_hard(self, quiet: bool = False):
+        """整表复核（v1.28）：采集结束自动跑一次，导出前再跑一次。
+
+        纯本地规则，只标记不改数据 —— 单看每一条都挺正常，把整表摆在一起
+        才看得出"这条伤害和同一 BOSS 的其它记录差 3 倍""这个人的血量夹在中间"。
+        """
+        rows = self._rows_hard
+        if not rows:
+            return
+        bosses = [b for b in (getattr(self.engine, "_bosses", None) or []) if b]
+        try:
+            roster = BK.read_roster(BK.active_roster() or None)
+        except Exception:
+            roster = {}
+        try:
+            findings, summary = RV.review(rows, bosses, roster)
+        except Exception as e:                    # 复核出错绝不能影响数据本身
+            A.log_exc("review")
+            if not quiet:
+                self.say(f"复核失败（数据不受影响）：{e}", "WARN")
+            return
+        self._review_findings = findings
+        self._review_summary = summary
+        if quiet:
+            return
+        line = RV.summary_line(summary)
+        if not line:
+            self.say(f"复核：{len(rows)} 条 · 没发现互相对不上的地方")
+            return
+        self.say(line, "WARN")
+        for f in findings[:6]:
+            self.say(f"  · 第 {f['idx']} 条【{f['code']}】{f['msg']}", "WARN")
+        if len(findings) > 6:
+            self.say(f"  · 其余 {len(findings) - 6} 条写在导出 CSV 的「复核」列里")
 
     def pick_rect(self):
         if self._mode != 1:
@@ -2242,8 +2286,11 @@ class Shell(QWidget):
         if miss:
             # 不拦着导出：留空比编一个值安全，但必须点名让人去核
             self.say(f"⚠ 第 {miss} 条缺字段，已照常导出，请人工核对", "WARN")
+        # 导出前再跑一次复核（数据可能被补字段 / 手动改过），结论写进「复核」列
+        self._review_hard(quiet=True)
         try:
-            out = S.export_rows(rows, BK.active_boss(), BK.active_roster())
+            out = S.export_rows(rows, BK.active_boss(), BK.active_roster(),
+                                review=RV.by_row(self._review_findings))
         except Exception as e:
             self.say(f"导出失败：{e}")
             return
@@ -2252,6 +2299,9 @@ class Shell(QWidget):
         # 只写文件名：完整路径会把三行日志挤成一行（路径长的机器上尤其明显）。
         # 全路径在「最近导出」那行与它的 tooltip 里。
         self.say(f"已导出 {len(rows)} 条 → {out.name}")
+        bad = (self._review_summary or {}).get("bad") or 0
+        if bad:
+            self.say(f"「复核」列标出 {bad} 条可疑，原因写在最后一列", "WARN")
 
     def _export_roster(self):
         """名单导出（v1.21）：有本次采集结果就先对账写库，否则直接导当前库。
