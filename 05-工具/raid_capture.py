@@ -117,6 +117,28 @@ class CaptureEngine:
             pass
         return True
 
+    def _insert_in_order(self, rows, rec, recs, idx, base):
+        """把 rec 插回 rows 里它该在的位置（v1.45）。
+
+        优先找"屏幕上它下面那一行"在 rows 里的**实际位置**当锚点 —— 这是精确的。
+        v1.43 用的是 `base = len(rows) - len(last_rows)`，可那个基准假设"rows 尾部
+        正好是上一屏的 recs"，补回的行一插进来就不成立了，越补越偏
+        （实测实机第 3 条 `班长` 被插到工具第 1 条）。
+
+        锚点顺序：下方邻居 → 上方邻居 → 才退回 base+idx（整屏都是新行时没邻居可比）。
+        """
+        for nxt in recs[idx + 1:]:
+            pos = next((j for j, x in enumerate(rows) if self._same_rec(x, nxt)), None)
+            if pos is not None:
+                rows.insert(pos, rec)
+                return
+        for prv in reversed(recs[:idx]):
+            pos = next((j for j, x in enumerate(rows) if self._same_rec(x, prv)), None)
+            if pos is not None:
+                rows.insert(pos + 1, rec)
+                return
+        rows.insert(min(max(0, base + idx), len(rows)), rec)
+
     def _measure(self, region, a, b):
         """只在**框选区域**内量位移，且带方向。
 
@@ -510,8 +532,7 @@ class CaptureEngine:
                         base = len(rows) - len(last_rows)
                         for r in lost:
                             idx = next((i for i, x in enumerate(recs) if x is r), 0)
-                            pos = min(max(0, base + idx), len(rows))
-                            rows.insert(pos, r)
+                            self._insert_in_order(rows, r, recs, idx, base)
                         rows, _m2 = self._dedupe(rows)
                         self.say(f"补回 {len(lost)} 条被位移跳过的行（已插回原位）")
                     last_rows = recs
@@ -536,6 +557,18 @@ class CaptureEngine:
             if getattr(self, "deep", False) and rows and not self._stop.is_set():
                 self.say("严格采集：从底部往回再扫一遍…")
                 _before_all = len(rows)
+                # 先采当前屏（v1.45）：到底时画面就是最底部，回扫第一步一滚，
+                # 这一屏就永远没被反方向看过 —— 用户实测"回扫没核对底部"。
+                _pre, _ploc = read_hard(img, eng, self._roster, self._bosses)
+                if _pre:
+                    _pnew = [r for r in _pre if not self._contains(rows, r)]
+                    for _i0, _r0 in enumerate(_pre):
+                        if self._contains(rows, _r0):
+                            continue
+                        self._insert_in_order(rows, _r0, _pre, _i0, len(rows))
+                    rows, _m0 = self._dedupe(rows)
+                    self.emit_rows(rows)
+                    self.say(f"回扫前先核对底部：{len(_pre)} 条，新补 {len(_pnew)} 条")
                 for _k in range(80):
                     if self._stop.is_set():
                         break
@@ -558,18 +591,16 @@ class CaptureEngine:
                         for _i2, _r2 in enumerate(recs2):
                             if self._contains(rows, _r2):
                                 continue
-                            _anchor = None
-                            for _nxt in recs2[_i2 + 1:]:
-                                _anchor = next((j for j, x in enumerate(rows)
-                                                if self._same_rec(x, _nxt)), None)
-                                if _anchor is not None:
-                                    break
-                            rows.insert(_anchor if _anchor is not None else len(rows), _r2)
+                            self._insert_in_order(rows, _r2, recs2, _i2, len(rows))
                         rows, _m2 = self._dedupe(rows)
                         self.emit_rows(rows)
-                    # 每 5 屏（以及到顶时）报一次，不然中间几十秒界面全黑，像卡住了
+                    # 每 5 屏报一次，不然中间几十秒界面全黑，像卡住了。
+                    # 带上"本屏有几条已在表里"—— 这就是回扫的重叠校验，
+                    # 和正向那句 `重叠 4/4` 是同一个意思（v1.45）。
                     if _k % 5 == 0:
-                        self.say(f"严格回扫 {_k} 屏 · 累计 {len(rows)} 条")
+                        _hit = sum(1 for x in recs2 if self._contains(rows, x)) if recs2 else 0
+                        self.say(f"严格回扫 {_k} 屏 · 累计 {len(rows)} 条 · "
+                                 f"本屏重叠 {_hit}/{len(recs2)}")
                     if _sh is not None and abs(_sh) < 5:
                         self.say(f"回扫到顶（位移 {_sh}px）· 共 {_k + 1} 屏")
                         break
