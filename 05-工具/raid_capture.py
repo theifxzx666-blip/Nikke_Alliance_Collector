@@ -168,6 +168,8 @@ class CaptureEngine:
     def _contains(cls, rows, rec):
         return any(cls._same_rec(r, rec) for r in rows)
 
+    last_merges = []          # 最近一次 _dedupe 合并掉的 (保留项, 被并项)
+
     @staticmethod
     def _dedupe(rows):
         """整表去重：同一条记录只留一份，保持出现顺序。返回 (新列表, 合并条数)。
@@ -183,7 +185,7 @@ class CaptureEngine:
           · 加成员名是为了避开普通模式"不同人打出相同伤害"的情形。
         命中时把缺的字段补上、置信度取高的，不新增行。
         """
-        out, merged = [], 0
+        out, merged, merges = [], 0, []
         for r in rows:
             rd = r.get("damage")
             dup = None
@@ -209,6 +211,9 @@ class CaptureEngine:
                 out.append(r)
                 continue
             merged += 1
+            # 留一笔"谁被并到谁"：用户看到条数变少时，能立刻分清
+            # 是误合并还是根本没采到（这两种在日志里本来长得一样）。
+            merges.append((dup, r))
             for k in ("boss", "pct"):
                 if not dup.get(k) and r.get(k):
                     dup[k] = r[k]
@@ -220,6 +225,7 @@ class CaptureEngine:
                     dup["damage"] = r.get("damage")
                     dup["damage_raw"] = r.get("damage_raw") or dup.get("damage_raw") or ""
                 dup["conf"] = r["conf"]
+        CaptureEngine.last_merges = merges
         return out, merged
 
     def _extra_read(self, region, eng):
@@ -479,7 +485,12 @@ class CaptureEngine:
                                 rows[base + idx] = rec
                     rows, merged = self._dedupe(rows + added)
                     if merged:
-                        self.say(f"合并 {merged} 条重复（同一伤害只留一条）")
+                        _d = "；".join(
+                            f"{a_.get('member') or '?'}·{a_.get('boss') or '?'} "
+                            f"{a_.get('damage_raw') or a_.get('damage')} ← "
+                            f"{b_.get('damage_raw') or b_.get('damage') or '缺伤害'}"
+                            for a_, b_ in CaptureEngine.last_merges[:3])
+                        self.say(f"合并 {merged} 条重复：{_d}")
                     # **兜底不变量：这一屏看见的每一条，都必须已经在列表里。**
                     # 位移判偏时 m 会算大，边界行会被整条跳过（实测 12:47 那轮
                     # 24 条里完全没有 `小卡卡`，可它就在留存帧的第一行）。
