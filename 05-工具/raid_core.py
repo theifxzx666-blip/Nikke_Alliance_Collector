@@ -41,6 +41,8 @@ DAMAGE_OK = re.compile(r"^\d{1,3}(?:,\d{3})+$")
 # 宽容版：只要"去掉逗号后全是数字且 ≥6 位"就算候选，交给 normalize 判定
 DAMAGE_CAND = re.compile(r"^[\d,\s]{6,}$")
 LEVEL_RE = re.compile(r"LEVEL\s*([0-9]{1,2})", re.I)
+# 匿名成员：昵称被游戏打成 `******` / `•••`（v1.32）
+ANON_RE = re.compile(r"^[*＊✱✳•·・]{2,}$")
 DAY_RE = re.compile(r"^第\s*([0-9]{1,2})\s*天$")
 PCT_RE = re.compile(r"^(\d+(?:\.\d+)?)\s*%$")
 
@@ -161,7 +163,15 @@ def parse_level(text: str):
 
 
 def is_member_text(s: str) -> bool:
-    """能不能当成员名用。昵称允许中英日韩 + 数字 + 少量符号，2~14 字。"""
+    """能不能当成员名用。昵称允许中英日韩 + 数字 + 少量符号，2~14 字。
+
+    匿名成员的昵称被游戏打成 `******`（v1.32）：没有中文也没有字母，后面
+    "至少一个可识别字符"那道关会把它判成噪声，整条记录跟着被丢 ——
+    伤害记录里少一个人，名单里人数也对不上。所以先放它过。
+    """
+    raw = str(s or "").strip()
+    if ANON_RE.match(raw):
+        return True
     t = norm_text(s)
     if len(t) < 2 or len(t) > 14:
         return False

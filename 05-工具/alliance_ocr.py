@@ -1492,11 +1492,20 @@ def find_bands(img: Image.Image, min_height: int = 6, min_pixels: int = 3,
 
 _NOISE = re.compile(r"(最近登录|小时前|分钟前|刚刚|联盟成员|挑战者|^[\d\s/()×xX.]+$)")
 _NICK_OK = re.compile(r"^[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7afA-Za-z0-9_.\-·\s]{2,14}$")
+# 匿名成员：游戏把昵称打成 `******`（v1.32）。真实存在的一行，但没有任何
+# 可识别字符 —— 不特判就会被 `_NICK_OK` 和"至少一个中文/字母"两道关挡掉。
+_ANON = re.compile(r"^[*＊✱✳•·・]{2,}$")
 
 
 def plausible(text: str) -> bool:
     t = (text or "").strip()
-    if not t or _NOISE.search(t):
+    if not t:
+        return False
+    # 匿名成员的昵称是 `******`：没有任何中文/字母，靠下面的两道关一个都过不去，
+    # 整行会被丢掉 —— 联盟明明 32 人，采出来只有 31 个。先放它过。
+    if _ANON.match(t):
+        return True
+    if _NOISE.search(t):
         return False
     if not _NICK_OK.match(t):
         return False

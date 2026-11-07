@@ -486,6 +486,17 @@ def main():
     t_replay()
     t_gate()
     t_confuse()
+    # ---------------- v1.32：匿名成员（昵称被游戏打成 ******）
+    check("匿名昵称 `******` 当名字放行（否则整行被丢、人数永远少）",
+          T.plausible("******"), "")
+    check("匿名昵称：全角星号也认", T.plausible("＊＊＊＊"), "")
+    check("匿名昵称：圆点占位也认", T.plausible("•••"), "")
+    check("匿名判定不误伤纯数字", not T.plausible("12345"), "")
+    check("匿名判定不误伤昵称与积分的粘连", not T.plausible("****** 24460"), "")
+    import raid_core as _rc
+    check("伤害记录侧同样放行匿名", _rc.is_member_text("******"), "")
+    check("伤害记录侧：BOSS 这类 UI 词仍被挡", not _rc.is_member_text("BOSS"), "")
+
     print(f"\n结果：{OK} 通过 · {FAIL} 失败")
     return 1 if FAIL else 0
 
