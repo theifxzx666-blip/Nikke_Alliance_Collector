@@ -152,6 +152,35 @@ class TableModel(QAbstractTableModel):
         self.endResetModel()
 
 
+def _screen_scale() -> float:
+    """系统 DPI 缩放比（150% → 1.5）。
+
+    为什么不用 `QWidget.devicePixelRatio()`：程序没在 manifest 里声明 DPI aware 时，
+    Qt 认为自己 1:1，这个值恒为 1；而 Win32 的客户区坐标是**物理像素** ——
+    两者差一个系统缩放，框选比例会整体缩成 1/scale。
+    实测 150% 屏：用户框了 40% 宽，记成 27%（40÷1.5）；200% 屏记成 19%（40÷2）。
+
+    `GetDeviceCaps(LOGPIXELSX)` 拿的是系统值，跟程序是否 aware 无关。
+    """
+    out = 1.0
+    try:
+        import ctypes
+        hdc = ctypes.windll.user32.GetDC(0)
+        dpi = ctypes.windll.gdi32.GetDeviceCaps(hdc, 88)      # LOGPIXELSX
+        ctypes.windll.user32.ReleaseDC(0, hdc)
+        if dpi and 72 <= dpi <= 480:
+            out = float(dpi) / 96.0
+    except Exception:
+        pass
+    # 两个来源取**大**的：Win32 系统 DPI 在某些进程 DPI 模式下会被归一成 96，
+    # 而 Qt 的 dpr 在另一些模式下才准。宁可多乘一档，也别少乘（少乘 = 框偏小）。
+    try:
+        out = max(out, float(QGuiApplication.primaryScreen().devicePixelRatio() or 1.0))
+    except Exception:
+        pass
+    return out
+
+
 class Shell(QWidget):
     def __init__(self):
         super().__init__()
@@ -2235,7 +2264,7 @@ class Shell(QWidget):
         # 而 RegionPicker emit 的 QRect 是 Qt 逻辑坐标 —— 高 DPI（150%/200%）下
         # 差一个 devicePixelRatio。不换算的话比例会缩成 1/dpr：
         # 实测 200% 屏上用户框了 40% 宽，记下来只有 19%，采出来 0 条。
-        _dpr = float(self.devicePixelRatio() or 1.0)
+        _dpr = _screen_scale()
         rx0, ry0 = rect.x() * _dpr, rect.y() * _dpr
         rx1, ry1 = rect.right() * _dpr, rect.bottom() * _dpr
         w, h = max(1, x1 - x0), max(1, y1 - y0)
@@ -2246,7 +2275,7 @@ class Shell(QWidget):
         # 用户实测框到 19% 宽就把「伤害」整列扔在框外 → locate 找不到完整卡片 →
         # 「这一屏没认到记录，收工」0 条。宁可当场说清楚，也别让他采完才发现。
         _w, _h = rel[2] - rel[0], rel[3] - rel[1]
-        if _w < 0.30 or _h < 0.50:
+        if _w < 0.18 or _h < 0.30:
             self.say(f"框太小了（宽 {_w:.0%} · 高 {_h:.0%}）—— 卡片列表正常约 "
                      f"40% 宽 × 80% 高。要框到「头像左边缘 → 伤害数字右边缘」，"
                      f"至少 4~5 行", "WARN")
