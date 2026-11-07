@@ -409,6 +409,265 @@ class CaptureEngine:
             prev = cur
         self.say(f"回滚 16 次仍未确认到顶（已滚 {moved} 次），按当前位置继续", "WARN")
 
+    # ---------------- v1.54 严格采集：重开再扫 ----------------
+
+    def _reopen_record(self, region, eng):
+        """关掉记录弹窗 → 重新点开。返回 (ok, 说明)。
+
+        为什么关掉重开，而不是就地滚回顶部：反向扫那 50 多屏里 `本屏重叠 6/6`
+        说明它几乎什么都没做（补进 2 条花 3 分钟）；而重开后列表必然回顶，
+        第二遍和第一遍的累计位移都从 0 起算，`_gy` 天然同坐标系 —— 重叠区的
+        比对才有意义。
+
+        关弹窗用**点外面**（用户截图实测有效）：弹窗大约占 27%~64% 宽 × 20%~83% 高，
+        所以 (8%, 50%) / (92%, 50%) 一定在弹窗外。每点一次都用 `on_record_page`
+        复核列表是不是真没了；两次都没关掉，再补一发 ESC。
+        """
+        import raid_nav as rn
+        import raid_ocr as ro
+
+        x0, y0, x1, y1 = region
+        w, h = max(1, x1 - x0), max(1, y1 - y0)
+
+        def _gone() -> bool:
+            try:
+                _img = self._crop(A.grab(region))
+                return not rn.RaidNav.on_record_page(ro.tokens(_img, eng), _img)
+            except Exception:
+                A.log_exc("deep-close")
+                return False
+
+        _closed = False
+        for rx, ry in ((0.08, 0.50), (0.92, 0.50)):
+            if self._stop.is_set():
+                return False, "已取消"
+            A.click_at(int(x0 + w * rx), int(y0 + h * ry))
+            time.sleep(0.55)
+            if _gone():
+                _closed = True
+                break
+        if not _closed:
+            # 点空白没用 → ESC。可能连突袭页一起关掉，下面的 goto_record 会逐级补回来。
+            try:
+                A.tap_key(0x1B)
+            except Exception:
+                A.log_exc("deep-esc")
+            time.sleep(0.7)
+
+        hook = getattr(self, "reenter", None)
+        if hook is None:
+            return False, "没有导航能力（宿主没提供 reenter）"
+        try:
+            ok, msg = hook(region)
+        except Exception as e:
+            A.log_exc("deep-reenter")
+            return False, f"重开记录页出错：{e}"
+        if not ok:
+            return False, f"重开没成功（{msg}）"
+        # 弹窗没关掉时 goto_record 会直接回"已经在联盟记录页"（ok=True）——
+        # 那种情况下列表还停在底部，第二遍会从中间起扫，`_gy` 全偏。
+        # Engine 会把它记进 `_entered_by_nav`（只有真的重新点开才是 True）。
+        if not getattr(self, "_entered_by_nav", True):
+            return False, "记录页没关掉（还停在原页面）→ 无法从头再扫"
+        return True, f"已重开记录页（{msg}）"
+
+    def _second_pass(self, region, eng, rows):
+        """严格采集第二遍：从列表顶部再扫一遍，只增补不重建。
+
+        和正向那套的区别：
+          · 不动 rows 的既有内容，只把"没见过"的行插进来；
+          · 不建 last_rows、不做 patch —— 那是"连续两屏"的机制，这一遍独立成段，
+            去重全靠 `_contains` + `_dedupe`；
+          · `_gy` 用**重叠区反校**，落在第一遍的坐标系里（见下）。
+
+        返回扫过的屏数（日志用）。
+        """
+        from raid_hard import MAX_SCREENS, read_hard
+
+        _off2 = 0          # 这一遍自己的累计位移（从顶部起算）
+        _k = 0
+        raw = A.grab(region)
+        img = self._crop(raw)
+        for _k in range(MAX_SCREENS):
+            if self._stop.is_set():
+                break
+            recs, loc = read_hard(img, eng, self._roster, self._bosses)
+            if not loc.cards:
+                break
+            _pitch = loc.pitch or self.last_pitch or 0
+            # 反校：拿"已经在表里"的行比一遍，取中位数修正累计位移。两遍的拖动
+            # 次数不一定一样（正向有过"加大步长再试一次"），不校准的话第二遍
+            # 补进的行会整体偏移几行 —— 那正是"滑得越多越容易乱"的同一个病。
+            _deltas = []
+            for _r in recs:
+                _old = next((x for x in rows if self._same_rec(x, _r)), None)
+                if _old is not None and _old.get("_gy") is not None:
+                    _deltas.append(int(_old["_gy"]) - (_off2 + int(_r.get("_y") or 0)))
+            if _deltas:
+                _deltas.sort()
+                _off2 += _deltas[len(_deltas) // 2]
+            _new = 0
+            for _i, _r in enumerate(recs):
+                if self._contains(rows, _r):
+                    continue
+                # 第二遍新行排在 9000+，同一 `_gy` 时让第一遍的读数优先
+                _r.setdefault("_pass", 9000 + _k)
+                self._insert_in_order(rows, _r, recs, _i, len(rows))
+                # 插入没给 `_gy`（找不到锚点）时，用这一遍的物理位置兜底
+                _r.setdefault("_gy", _off2 + int(_r.get("_y") or 0))
+                _new += 1
+            if _new:
+                # **原地换内容**（v1.54）：`_dedupe` 返回的是新列表，如果只把
+                # 局部名字重绑过去，调用方（capture）手里还是旧对象 —— 它会拿
+                # 一份"没有这一屏新增"的列表继续跑，第二遍等于白扫。
+                rows[:] = self._dedupe(rows)[0]
+                self.emit_rows(rows)
+            # 表格跟着走（和回扫那套一致）
+            _sig = getattr(self, "scrollRow", None)
+            _pos = next((j for j, x in enumerate(rows)
+                         if any(self._same_rec(x, _r) for _r in recs)), None)
+            if _pos is not None and _sig is not None:
+                _sig.emit(_pos)
+            if _k % 5 == 0:
+                _hit = sum(1 for x in recs if self._contains(rows, x))
+                self.say(f"严格第二遍 {_k} 屏 · 累计 {len(rows)} 条 · "
+                         f"本屏重叠 {_hit}/{len(recs)}"
+                         + (f" · 新增 {_new} 条" if _new else ""))
+            if not self._drag_list(region, int(min(A.DRAG_MAX, max(
+                    A.MIN_DRAG_PX, _pitch * self.SCROLL_ROWS)))):
+                break
+            _prev = raw
+            raw, _s, _st = A.wait_settled(region, raw)
+            _sh, _co = self._measure(region, _prev, raw)
+            img = self._crop(raw)
+            if _sh is not None and _co >= 0.3:
+                _off2 += abs(int(_sh))
+            if _sh is not None and abs(_sh) < 5:
+                self.say(f"第二遍到底（位移 {_sh}px）· 共 {_k + 1} 屏")
+                break
+        return _k + 1
+
+    # ---------------- v1.54 成员额度锚定 ----------------
+
+    @classmethod
+    def _name_sim(cls, u: str, n: str) -> float:
+        """两个昵称的相似度；**不做书写系统逐位校验**。
+
+        逐屏的 `same_row` 要求书写系统逐位一致，`小卡ト`（末位是片假名）就被
+        那一道挡在门外——相似度 0.67 也没用。收工时的锚定有额度兜底，可以松掉
+        这一道：改错了会让人变成 4 刀，试算当场就能发现。
+        """
+        if not u or not n:
+            return 0.0
+        return difflib.SequenceMatcher(None, u, n).ratio()
+
+    def _quota_after(self, rows, target: str) -> int:
+        """把 target 的行按 `_same_rec` 去一遍重之后还剩几条（额度试算）。
+
+        为什么不能直接 `cnt[target] + cnt[u]`：残读那条**往往就是某一刀的重复**
+        （血量和 BOSS 都对得上），改名后会被去重吃掉，总数不变。
+        实测 `小卡ト`(1 条) → `小卡卡`(已 3 条)：直接相加得 4 会误判"满额"，
+        可按 `_same_rec` 去重后仍然是 3 —— 这一条本来就该并进去。
+        """
+        sub = [dict(r) for r in rows if (r.get("member") or "") == target]
+        kept, _m = self._dedupe(sub)
+        return len(kept)
+
+    def _anchor_members(self, rows, limit: int = 3):
+        """收工前的成员锚定：用「库闭集 + 3 刀额度」把读歪的名字归位。
+
+        逐屏归位（`read_hard` 里的 `roster_fix`）只有字面证据，而且要求
+        `same_row` 的书写系统逐位一致 —— `小卡ト`（末位片假名）就被那道挡住，
+        相似度 0.67 也用不上。收工时多了一样逐屏没有的东西：**账本**。
+        一个人一轮最多 3 刀，所以"改名"是可以验算的。
+
+        条件（全部成立才改）：
+          1) 长度 >= 3（两字名不做模糊归档：`大白`/`萧白` 是两个真人）
+          2) 等长 + 相似度 >= 0.55，或 长度差 1 + 相似度 >= 0.65
+          3) 候选**恰好一个**
+          4) 试算额度：改完 + 去重后不超过 3 条
+
+        改不动的只给建议、不改字 —— 改错了就再也看不出来，不改至少复核还能靠
+        「不在库」提醒人。返回 (改了个人名数, 说明串)。
+        """
+        roster = self._roster or {}
+        entries = roster.get("names") if isinstance(roster, dict) else None
+        names = list(entries or {})
+        if not names or not rows:
+            return 0, ""
+
+        cnt = {}
+        for r in rows:
+            m = r.get("member") or ""
+            if m:
+                cnt[m] = cnt.get(m, 0) + 1
+        pool = set(names)
+        unknown = [m for m in cnt if m not in pool]
+        if not unknown:
+            return 0, ""
+
+        fixed, tips = [], []
+        _tipped = set()      # 已经在 tips 里说过的名字，别再补一句"未改"
+        # 先处理出现次数多的：额度试算更稳（只露一次的多半是残读）
+        for u in sorted(unknown, key=lambda n: -cnt[n]):
+            if len(u) < 3:
+                continue
+            cands = []
+            for n in names:
+                _d = abs(len(u) - len(n))
+                _r = self._name_sim(u, n)
+                if (_d == 0 and _r >= 0.55) or (_d == 1 and _r >= 0.65):
+                    cands.append((_r, n))
+            cands.sort(reverse=True)
+            if len(cands) != 1:
+                if cands:
+                    tips.append(f"{u} 有 {len(cands)} 个候选，不敢改")
+                    _tipped.add(u)
+                continue
+            _r, target = cands[0]
+            # 试算：先按 target 算一遍额度，超了就原样退回。
+            _bak = [(rec, rec.get("member")) for rec in rows
+                    if (rec.get("member") or "") == u]
+            for rec, _ in _bak:
+                rec["member"] = target
+            _after = self._quota_after(rows, target)
+            if _after > limit:
+                for rec, _old in _bak:
+                    rec["member"] = _old
+                tips.append(f"{u}≈{target}（{_r:.2f}）但算下来 {_after} 刀，不归")
+                _tipped.add(u)
+                continue
+            for rec, _old in _bak:
+                _note = rec.get("member_note") or ""
+                rec["member_note"] = ((_note + " · ") if _note else "") + \
+                    f"额度锚定 {u}→{target}（相似 {_r:.2f}，去重后 {_after}/3 刀）"
+            fixed.append(f"{u}→{target} {cnt[u]} 条（去重后 {_after}/3 刀）")
+            cnt[target] = cnt.get(target, 0) + cnt[u]
+            cnt.pop(u, None)
+
+        for u in unknown:
+            if u not in cnt or u in _tipped:
+                continue
+            best, br = None, 0.0
+            for n in names:
+                _r = self._name_sim(u, n)
+                if _r > br:
+                    best, br = n, _r
+            if best and br >= 0.25:
+                tips.append(f"{u}≈{best}（{br:.2f}）未改")
+
+        msg = ""
+        if fixed:
+            msg = "成员锚定：" + " · ".join(fixed)
+        if tips:
+            # 只报前 4 条：一屏日志塞 17 个"未改"没人看，反而把真正改掉的挤没了。
+            _head = "；".join(tips[:4])
+            _more = f"；另有 {len(tips) - 4} 个" if len(tips) > 4 else ""
+            msg += ("；" if msg else "成员锚定：") + _head + _more
+        if msg:
+            msg += " —— 改不动的请人工核（复核列会点名）"
+        return len(fixed), msg
+
     def capture(self, region, from_nav: bool = False):
         """滚采整页。`from_nav=True` = 记录页是刚刚由导航点开的，跳过回顶。
 
@@ -596,75 +855,43 @@ class CaptureEngine:
                 last = img
                 raw, _s, _st = A.wait_settled(region, raw)
                 img = self._crop(raw)
-            # ---- v1.40 严格采集：到底后再从下往上扫一遍 ----
+            # ---- v1.54 严格采集：重开记录页，从头再扫一遍 ----
             #
-            # 为什么有用：正向扫描时被裁在上下边缘的行，反向时它是中间行。
-            # 同一个物理行两个方向各完整露一次，边缘就不再是"只露半截"的单点。
-            # 代价是拖动次数翻倍（约 +90 秒），所以做成开关，默认关。
+            # v1.40~1.53 是"从底部反向扫一遍"。实测那 50 多屏里 `本屏重叠 6/6`
+            # 说明它几乎什么都没做（补进 2 条，花 3 分钟）—— 反向时累计位移的
+            # 坐标系和正向不一致，插入只能靠锚点，锚点一错就错一串。
+            # 改成"关弹窗 → 重开 → 从上往下"：两遍都从顶部起算，`_gy` 同坐标。
             if getattr(self, "deep", False) and rows and not self._stop.is_set():
-                self.say("严格采集：从底部往回再扫一遍…")
                 _before_all = len(rows)
-                # 先采当前屏（v1.45）：到底时画面就是最底部，回扫第一步一滚，
-                # 这一屏就永远没被反方向看过 —— 用户实测"回扫没核对底部"。
-                _pre, _ploc = read_hard(img, eng, self._roster, self._bosses)
-                if _pre:
-                    _pnew = [r for r in _pre if not self._contains(rows, r)]
-                    for _i0, _r0 in enumerate(_pre):
-                        if self._contains(rows, _r0):
-                            continue
-                        self._insert_in_order(rows, _r0, _pre, _i0, len(rows))
-                    rows, _m0 = self._dedupe(rows)
-                    self.emit_rows(rows)
-                    self.say(f"回扫前先核对底部：{len(_pre)} 条，新补 {len(_pnew)} 条")
-                for _k in range(80):
-                    if self._stop.is_set():
-                        break
-                    if not self._drag_list(region, int(min(A.DRAG_MAX, max(
-                            A.MIN_DRAG_PX, pitch * self.SCROLL_ROWS))), up=True):
-                        break
-                    _prev_raw = raw
-                    last = img
-                    raw, _s, _st = A.wait_settled(region, raw)
-                    img = self._crop(raw)
-                    # 判顶只看**位移**，不看"有没有新增"：正向采全时反向第一屏
-                    # 必然没有新增，拿它当"到顶"会 3 屏就收工（用户 01:36 实测）。
-                    _sh, _co = self._measure(region, _prev_raw, raw)
-                    recs2, _loc2 = read_hard(img, eng, self._roster, self._bosses)
-                    _n0 = len(rows)
-                    if recs2:
-                        # 回扫补进来的行也要插到"它在屏幕上的邻居旁边"，不能 append。
-                        # 反向时屏幕是从旧到新、rows 也是，所以用**屏幕下方那一行**
-                        # 当锚点，插到它前面；找不到锚点才放末尾（v1.43）。
-                        for _i2, _r2 in enumerate(recs2):
-                            if self._contains(rows, _r2):
-                                continue
-                            self._insert_in_order(rows, _r2, recs2, _i2, len(rows))
-                        rows, _m2 = self._dedupe(rows)
-                        self.emit_rows(rows)
-                    # 每 5 屏报一次，不然中间几十秒界面全黑，像卡住了。
-                    # 带上"本屏有几条已在表里"—— 这就是回扫的重叠校验，
-                    # 和正向那句 `重叠 4/4` 是同一个意思（v1.45）。
-                    # 表格跟着回扫位置走（v1.46）：找这一屏的行在表里的位置
-                    if recs2:
-                        _pos = next((j for j, x in enumerate(rows)
-                                     if any(self._same_rec(x, _r) for _r in recs2)), None)
-                        _sig = getattr(self, "scrollRow", None)
-                        if _pos is not None and _sig is not None:
-                            _sig.emit(_pos)
-                    if _k % 5 == 0:
-                        _hit = sum(1 for x in recs2 if self._contains(rows, x)) if recs2 else 0
-                        self.say(f"严格回扫 {_k} 屏 · 累计 {len(rows)} 条 · "
-                                 f"本屏重叠 {_hit}/{len(recs2)}")
-                    if _sh is not None and abs(_sh) < 5:
-                        self.say(f"回扫到顶（位移 {_sh}px）· 共 {_k + 1} 屏")
-                        break
+                _ok_re, _how_re = self._reopen_record(region, eng)
+                self.say(f"严格采集：{_how_re}", "INFO" if _ok_re else "WARN")
+                if not _ok_re:
+                    # 重开失败就退回"拉回顶部"：功能等价，只是少了重新加载。
+                    try:
+                        self._scroll_to_top(region, pitch)
+                    except Exception:
+                        A.log_exc("deep-top")
+                _p2 = self._second_pass(region, eng, rows)
                 _added = len(rows) - _before_all
                 if _added:
-                    self.say(f"严格采集完成：回扫 {_k + 1} 屏 · 补进 {_added} 条 "
+                    self.say(f"严格采集完成：第二遍 {_p2} 屏 · 补进 {_added} 条 "
                              f"→ 正向确实漏了，结算前建议都开着")
                 else:
-                    self.say(f"严格采集完成：回扫 {_k + 1} 屏 · 一条没补 "
+                    self.say(f"严格采集完成：第二遍 {_p2} 屏 · 一条没补 "
                              f"→ 正向已采全，这次严格模式白跑一趟")
+            # v1.54：成员额度锚定放在最终排序**之前** —— 归位后可能撞成同一条，
+            # 还能被下面那次去重收掉；报告也要早于"超过 3 条"，否则用户看到
+            # 某人 4 条会先怀疑是重复采集。
+            if rows:
+                try:
+                    _na, _nmsg = self._anchor_members(rows)
+                    if _nmsg:
+                        self.say(_nmsg)
+                    if _na:
+                        rows, _mn = self._dedupe(rows)
+                        self.emit_rows(rows)
+                except Exception:
+                    A.log_exc("hard-anchor")
 
             # 收工自检：这两条不拦流程，只把"可能有问题"当场说出来。
             # 以前要等导出后人工翻 CSV 才发现，代价太大。

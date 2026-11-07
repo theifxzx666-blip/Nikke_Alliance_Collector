@@ -302,6 +302,192 @@ try:
 finally:
     A.get_engine, A.grab, RH.read_hard = _orig
 
+# ---------------- v1.54 成员额度锚定 ----------------
+#
+# 为什么单独测：它会在**收工时改数据**，改错了比不改更糟（复核再也标不出来）。
+# 四个条件任何一个失效都必须拒绝 —— 所以每个条件都要各有一个反例。
+from raid_capture import CaptureEngine as CE
+
+
+class _Anchor(CE):
+    def __init__(self, names):
+        self._roster = {"names": {n: {} for n in names}}
+        self._bosses = []
+
+
+def _rec(member, boss, dmg, pct, conf=0.9):
+    return {"member": member, "boss": boss, "damage": dmg,
+            "damage_raw": str(dmg), "pct": pct, "conf": conf}
+
+
+_NAMES = ["小卡卡", "博麗霊夢", "PPORANGE", "马三一"]
+_eng = _Anchor(_NAMES)
+
+# 1) 残读 + 那个人还差一刀 → 归位
+_rows = [_rec("小卡卡", "医师", 100, "50.0%"), _rec("小卡卡", "铁匠", 200, "40.0%"),
+         _rec("小卡ト", "邪魔", 300, "30.0%")]
+_n, _m = _eng._anchor_members(_rows)
+check("残读归位：小卡ト→小卡卡", _n == 1 and _rows[2]["member"] == "小卡卡", _m)
+check("归位记进 member_note", "额度锚定" in (_rows[2].get("member_note") or ""),
+      str(_rows[2].get("member_note")))
+
+# 2) 那个人已经满 3 刀，且这条**不是重复** → 拒绝改名（否则变成 4 刀）
+_rows = [_rec("小卡卡", "医师", 100, "50.0%"), _rec("小卡卡", "铁匠", 200, "40.0%"),
+         _rec("小卡卡", "邪魔", 300, "30.0%"), _rec("小卡ト", "古铁", 400, "20.0%")]
+_n, _m = _eng._anchor_members(_rows)
+check("满 3 刀就拒绝改名", _n == 0 and _rows[3]["member"] == "小卡ト", _m)
+check("拒绝时说清是额度问题", "不归" in _m, _m)
+
+# 3) 满 3 刀但这条**是其中一刀的重复** → 允许改名（去重会吃掉，仍是 3）
+_rows = [_rec("小卡卡", "医师", 100, "50.0%"), _rec("小卡卡", "铁匠", 200, "40.0%"),
+         _rec("小卡卡", "邪魔", 300, "30.0%"),
+         _rec("小卡ト", "邪魔", 300, "30.0%")]
+_n, _m = _eng._anchor_members(_rows)
+check("重复行改名后仍是 3 刀 → 允许", _n == 1 and _rows[3]["member"] == "小卡卡", _m)
+_after, _mm = CE._dedupe(_rows)
+check("改完之后去重只剩 3 条", len(_after) == 3 and _mm == 1, f"{len(_after)} 条")
+
+# 4) 等长但相似度不够（博留雪墓 0.25）→ 不改
+_rows = [_rec("博留雪墓", "医师", 100, "50.0%")]
+_n, _m = _eng._anchor_members(_rows)
+check("相似度不到 0.55 不改字", _n == 0 and _rows[0]["member"] == "博留雪墓", _m)
+check("但会给建议", "≈" in _m, _m)
+
+# 5) 两级门槛：等长 0.55 / 差一字 0.65。FrURAINGE↔PPORANGE 是 0.59 差一字 → 不改
+_rows = [_rec("FrURAINGE", "医师", 100, "50.0%")]
+_n, _m = _eng._anchor_members(_rows)
+check("差一字但相似度只 0.59 → 不改", _n == 0, _m)
+
+# 6) 两字名不做模糊归档（大白/萧白 是两个真人）
+_rows = [_rec("萧白", "医师", 100, "50.0%"), _rec("大白", "医师", 200, "40.0%")]
+_n, _m = _eng._anchor_members(_rows)
+check("两字名不归位", _n == 0 and _rows[1]["member"] == "大白", _m)
+
+# 7) 有多个候选 → 不敢改（库里真有近名成员时，猜哪个都错）
+_eng2 = _Anchor(["小卡卡", "小卡七", "马三一"])
+_rows = [_rec("小卡ト", "医师", 100, "50.0%")]
+_n, _m = _eng2._anchor_members(_rows)
+check("多个候选就拒绝", _n == 0 and _rows[0]["member"] == "小卡ト", _m)
+check("拒绝理由写「不敢改」", "不敢改" in _m, _m)
+
+# 8) 库为空 / 全部在库 → 直接返回，不动数据
+_eng3 = _Anchor([])
+_rows = [_rec("谁的", "医师", 100, "50.0%")]
+check("没有库就什么都不做", _eng3._anchor_members(_rows) == (0, ""), "")
+
+# 9) 两个底层判据各自的边界
+check("_name_sim 不看书写系统（小卡ト 0.67）",
+      round(CE._name_sim("小卡ト", "小卡卡"), 2) == 0.67,
+      str(round(CE._name_sim("小卡ト", "小卡卡"), 2)))
+check("_quota_after 会先去重",
+      _Anchor(_NAMES)._quota_after(
+          [_rec("小卡卡", "医师", 100, "50.0%"), _rec("小卡卡", "医师", 100, "50.0%")],
+          "小卡卡") == 1, "")
+
+# ---------------- v1.54 严格第二遍：从头扫一遍 + 位置校准 ----------------
+#
+# 这一段是新建的循环（正向那套 200 多行没动），最容易错的是两处：
+#   · `_gy` 落不到第一遍的坐标系里（两遍拖动次数不同就整体偏几行）
+#   · 补进的行插错位置
+# 所以用一个"12 条、每屏 6 条、每次滚 2 条"的假画面跑一遍，且**故意让第二次
+# 的位移读数偏 10px/次**（正向有过"加大步长再试一次"，两遍步数天然会不一致）。
+import threading
+
+_ALL = [{"member": f"人{i}", "boss": "古铁", "damage": 1000 + i,
+         "damage_raw": str(1000 + i), "pct": f"{i}%", "conf": 0.9} for i in range(12)]
+_PITCH = 100.0
+
+
+class _FakeImg:
+    def __init__(self, screen):
+        self.screen = screen
+
+    def crop(self, box):
+        return self
+
+
+class _FakeLoc:
+    cards = [1] * 6
+    box = (0, 0, 600, 600)
+
+    def __init__(self):
+        self.pitch = _PITCH
+
+
+class _Deep(CE):
+    """只带第二遍用得到的字段，UI 相关全部空实现。"""
+
+    def __init__(self, rows):
+        self._stop = threading.Event()
+        self._roster = None
+        self._bosses = []
+        self.last_pitch = _PITCH
+        self.screen = 0
+        self.said = []
+        self._rows = rows
+
+    def _crop(self, img):
+        return img
+
+    def say(self, msg, level="INFO"):
+        self.said.append(msg)
+
+    def emit_rows(self, rows):
+        pass
+
+    def _drag_list(self, region, dist, up=False):
+        # 现实里它只表示"这次拖出得去手"，到底是由 `_measure` 的位移判断的
+        self.screen += 1
+        return True
+
+    def _measure(self, region, a, b):
+        # 前三次故意偏 10px（考校准）；到第 4 屏之后拖不动了 → 位移 0
+        return (0, 0.9) if self.screen > 3 else (210, 0.9)
+
+
+def _fake_read(img, eng, roster=None, bosses=None):
+    off = img.screen * 2
+    out = []
+    for j, r in enumerate(_ALL[off:off + 6]):
+        d = dict(r)
+        d["_y"] = 100 + j * 100
+        out.append(d)
+    return out, _FakeLoc()
+
+
+_orig_deep = (A.grab, A.wait_settled, RH.read_hard)
+try:
+    # 第一遍漏了第 4、9 条（模拟边缘行被裁掉）
+    _first = []
+    for i in (0, 1, 2, 3, 5, 6, 7, 8, 10, 11):
+        d = dict(_ALL[i])
+        d["_y"] = 100
+        d["_gy"] = 100 + i * 100
+        _first.append(d)
+
+    _d = _Deep(_first)
+    # 假画面必须跟着宿主翻页：`_second_pass` 只在开头 grab 一次，之后每轮
+    # 都用 wait_settled 的返回值 —— 固定返回 screen=0 的话它永远在读第一屏。
+    A.grab = lambda region: _FakeImg(_d.screen)
+    A.wait_settled = lambda region, raw: (_FakeImg(_d.screen), 0.0, 0)
+    RH.read_hard = _fake_read
+
+    _screens = _d._second_pass((0, 0, 100, 100), None, _first)
+    _d._rows.sort(key=lambda r: int(r.get("_gy") or 1 << 30))
+    _order = [r["member"] for r in _d._rows]
+
+    check("第二遍把所有行都补齐", len(_d._rows) == 12, f"{len(_d._rows)} 条")
+    check("第二遍顺序完全正确", _order == [f"人{i}" for i in range(12)], str(_order))
+    check("扫过的屏数报得对", _screens == 4, str(_screens))
+    check("排版没被第二遍打乱（_gy 没整体偏移）",
+          all(abs(int(r["_gy"]) - (100 + int(r["member"][1:]) * 100)) <= _PITCH
+              for r in _d._rows),
+          str([(r["member"], r["_gy"]) for r in _d._rows[:4]]))
+    check("第二遍有新行时日志会报",
+          any("严格第二遍" in m for m in _d.said), str(_d.said[:3]))
+finally:
+    A.grab, A.wait_settled, RH.read_hard = _orig_deep
+
 print()
 if fail:
     print(f"失败 {len(fail)} 项：" + "、".join(fail))
