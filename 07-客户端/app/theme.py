@@ -18,6 +18,10 @@ TEXT = "#D6D9DE"
 TEXT_DIM = "#8B9199"
 ACCENT = "#2F6FD0"
 ACCENT_HOVER = "#3D80E0"
+# 表格选中行底色。**必须不透明**：之前写 rgba(...,41)（16%），压在深色底上几乎看不见，
+# 用户 2026-11-07 反馈"看不到选中的状态"；改成 rgba(...,120) 后 Qt 仍按系统 Highlight
+# 灰白色画（alpha 在部分平台被忽略），最后用不透明深蓝才真正生效。
+SEL_BG = "#2A5FA8"
 OK = "#45B076"
 OK_TEXT = "#7ED3A3"
 WARN = "#E0A030"
@@ -145,9 +149,16 @@ def qss() -> str:
     /* 表格 */
     QTableView {{
         background: transparent; border: none; gridline-color: transparent;
-        selection-background-color: rgba(47,111,208,41); selection-color: {TEXT};
+        /* 选中色原来的 alpha 只有 41/255（16%），压在深色底上几乎看不出来 ——
+           用户 2026-11-07 反馈「看不到选中的状态」。提到 47%，并留白字。 */
+        selection-background-color: {SEL_BG}; selection-color: #FFFFFF;
     }}
     QTableView::item {{ border-bottom: 1px solid rgba(255,255,255,13); padding: 0 4px; }}
+    /* 再来一道左侧亮条：只靠背景色在深色主题下还是容易和悬停混淆 */
+    QTableView::item:selected {{
+        background: {SEL_BG}; color: #FFFFFF;
+        border-left: 3px solid {ACCENT}; border-bottom: 1px solid transparent;
+    }}
     /* 表头底色必须自己给：默认吃系统 palette 的浅色 Button 色，
        半透明白压上去就是一条白板（离屏渲染实测过）。用不透明深色收口。 */
     QHeaderView {{ background: transparent; border: none; }}

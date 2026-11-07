@@ -496,6 +496,9 @@ def main():
     import raid_core as _rc
     check("伤害记录侧同样放行匿名", _rc.is_member_text("******"), "")
     check("伤害记录侧：BOSS 这类 UI 词仍被挡", not _rc.is_member_text("BOSS"), "")
+    check("颜色不对的带只收匿名（横幅/装饰不收）",
+          T.is_anon_band("******") and not T.is_anon_band("最近登录 4分钟前"), "")
+    check("颜色不对的带：普通昵称也不收", not T.is_anon_band("浩然菌"), "")
 
     print(f"\n结果：{OK} 通过 · {FAIL} 失败")
     return 1 if FAIL else 0

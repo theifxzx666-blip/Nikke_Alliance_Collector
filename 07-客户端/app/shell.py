@@ -628,10 +628,18 @@ class Shell(QWidget):
         self.btn_r_exp.clicked.connect(self.export)
         self.btn_open2 = QPushButton("打开目录")
         self.btn_open2.clicked.connect(self.open_export_dir)
+        # v1.33：删除一直能写库，但改不了 —— 读漏/读歪的名字只能靠 CSV 绕一圈。
+        self.btn_add = QPushButton("加人")
+        self.btn_add.setToolTip("手动往当前库里加一位成员（比如匿名那位、或漏读的人）")
+        self.btn_add.clicked.connect(self._add_roster_row)
+        self.btn_edit = QPushButton("改名")
+        self.btn_edit.setToolTip("把选中的成员改成正确写法（直接写回库，下次采集生效）")
+        self.btn_edit.clicked.connect(self._edit_roster_row)
         self.btn_del = QPushButton("删除选中")
         self.btn_del.setToolTip("删掉表格里选中的成员（只改库文件，下次采集生效）")
         self.btn_del.clicked.connect(self._del_roster_row)
-        for b in (self.btn_r_exp, self.btn_open2, self.btn_del):
+        for b in (self.btn_r_exp, self.btn_open2, self.btn_add,
+                  self.btn_edit, self.btn_del):
             row.addWidget(b)
         row.addStretch(1)
         return box
@@ -699,6 +707,12 @@ class Shell(QWidget):
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setFocusPolicy(Qt.NoFocus)
+        # 选中行高亮（v1.33）：全局 QSS 的 `QTableView::item:selected` 在这张表上
+        # 不生效（`::item` 的分隔线画得出来，伪状态的背景色却被系统 Highlight 盖住，
+        # 选中的行只剩一层灰白），palette 的 Highlight 也被 QStyleSheetStyle 接管。
+        # 所以在这一处破例用组件级样式表 —— 它优先级高于全局表，是这里唯一管用的写法。
+        self.table.setStyleSheet(
+            f"QTableView::item:selected {{ background: {T.SEL_BG}; color: #FFFFFF; }}")
         self.table.verticalHeader().setDefaultSectionSize(T.H_ROW)
         hh = self.table.horizontalHeader()
         hh.setHighlightSections(False)
@@ -1377,6 +1391,78 @@ class Shell(QWidget):
         if BK.write_roster(name, data, activate=False):
             self._load_roster_table()
             self.say(f"已把「{old}」改名为「{new}」（库：{name}）")
+
+    def _add_roster_row(self):
+        """手动往当前库加一位成员（v1.33，写回库）。
+
+        补采漏掉的人、或者匿名那位想单独记一笔时用。加进来的记 `rounds=1`、
+        `score=1.0` —— 手填的是用户确认过的，不需要再被工具怀疑。
+        """
+        from datetime import datetime
+
+        from PySide6.QtWidgets import QInputDialog
+        book = BK.active_roster()
+        if not book:
+            self.say("先选一套成员库（上面那个下拉）")
+            return
+        new, ok = QInputDialog.getText(self, "加一位成员",
+                                       f"要加进「{book}」的昵称：")
+        if not ok:
+            return
+        new = (new or "").strip()
+        if not new:
+            return
+        data = BK.read_roster(book)
+        names = data.get("names") or {}
+        if new in names:
+            self.say(f"「{new}」已经在「{book}」里了")
+            return
+        now = datetime.now().strftime("%Y-%m-%d %H:%M")
+        names[new] = {"first": now, "last": now, "rounds": 1, "miss": 0,
+                      "score": 1.0, "alias": []}
+        data["names"] = names
+        if not BK.write_roster(book, data, activate=False):
+            self.say("写库失败（目录权限？）")
+            return
+        self._load_roster_table()
+        self.say(f"已把「{new}」加进「{book}」· 现在 {len(names)} 人")
+
+    def _edit_roster_row(self):
+        """把选中的成员改成正确写法（v1.33，写回库）。
+
+        以前这张表只能看和删 —— 名字被读歪了（`I-IXX` / `UCOLVED`）只能去
+        Excel 里改 CSV 再导回来，绕一大圈。改名就地写入，下次采集按新的归位。
+        """
+        from PySide6.QtWidgets import QInputDialog, QMessageBox
+        row = self.table.currentIndex().row()
+        old = self._roster_name_at(row)
+        book = BK.active_roster()
+        if not old or not book:
+            self.say("先在表格里选中一位成员")
+            return
+        new, ok = QInputDialog.getText(self, "改成正确写法",
+                                       f"「{old}」改成：", text=old)
+        if not ok:
+            return
+        new = (new or "").strip()
+        if not new or new == old:
+            return
+        data = BK.read_roster(book)
+        names = data.get("names") or {}
+        if old not in names:
+            self.say(f"「{old}」已经不在库里了 —— 先刷新一下列表")
+            return
+        if new in names:
+            QMessageBox.information(self, "重名了",
+                                    f"「{new}」已经在「{book}」里，换个写法。")
+            return
+        # 保序重建，别用 pop+赋值：那会把这条挪到字典末尾，表格跟着跳
+        data["names"] = {(new if k == old else k): v for k, v in names.items()}
+        if not BK.write_roster(book, data, activate=False):
+            self.say("写库失败（目录权限？）")
+            return
+        self._load_roster_table()
+        self.say(f"已把「{old}」改成「{new}」· 下次采集按新的归位")
 
     def _del_roster_row(self):
         """删除选中成员（写回库，二次确认）。"""

@@ -1497,6 +1497,15 @@ _NICK_OK = re.compile(r"^[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7afA-Za-z0-9_.\-·
 _ANON = re.compile(r"^[*＊✱✳•·・]{2,}$")
 
 
+def is_anon_band(text: str) -> bool:
+    """这条带是匿名占位吗（`******` / `•••`）。
+
+    用于"文字色不在昵称区间"的带：那些正常是横幅和装饰，只有整条星号
+    才值得收（匿名成员的昵称笔迹是浅灰，天然落在区间外）。
+    """
+    return bool(_ANON.match((text or "").strip()))
+
+
 def plausible(text: str) -> bool:
     t = (text or "").strip()
     if not t:
@@ -2032,11 +2041,14 @@ def scan(img: Image.Image, debug_dir: Path | None = None, pitch=(50, 140)):
     passed = 0
     for i, (y0, y1) in enumerate(bands):
         h = y1 - y0 + 1
-        # 横幅行的文字色不在昵称区间，直接跳过，不进识别
+        # 横幅行的文字色不在昵称区间，直接跳过，不进识别。
+        # 但**不能整条跳过**：匿名成员的昵称是 `******`，笔迹是浅灰，
+        # 灰阶落在 50~115 之外 —— 2026-11-07 真机 26 屏一屏都没认出来，
+        # 就是因为它在这一行被滤掉了。下面识别完只对"整条星号"放行。
         c = band_text_color(img, y0, y1)
-        if c is None or not (TEXT_COLOR[0] <= c <= TEXT_COLOR[1]):
-            continue
-        passed += 1
+        dim = c is None or not (TEXT_COLOR[0] <= c <= TEXT_COLOR[1])
+        if not dim:
+            passed += 1
         pad_y = max(2, int(h * 0.35))
         cy0, cy1 = max(0, y0 - pad_y), min(img.height, y1 + pad_y)
         span = name_span(img, y0, y1) or (0, img.width)
@@ -2049,7 +2061,11 @@ def scan(img: Image.Image, debug_dir: Path | None = None, pitch=(50, 140)):
         text, score = read_line(img, box)
         if debug_dir is not None:
             img.crop(box).save(debug_dir / f"band{i:02d}_{y0}-{y1}.png")
-        if score < MIN_SCORE or not plausible(text):
+        if score < MIN_SCORE:
+            continue
+        if dim and not is_anon_band(text):
+            continue                      # 颜色不对又不是匿名 → 照旧当噪声
+        if not plausible(text):
             continue
         rows.append(((y0 + y1) // 2, text, round(score, 3)))
     rows.sort()
