@@ -2,7 +2,7 @@
 
 NIKKE（胜利女神：新的希望）联盟数据采集桌面客户端。通过窗口截图与 OCR 识别联盟成员名单、联盟突袭（HARD）伤害记录，替代人工逐行抄录。
 
-当前版本：**v1.22 Beta**
+当前版本：**v1.59.3 Beta**
 
 ## 功能
 
@@ -11,7 +11,7 @@ NIKKE（胜利女神：新的希望）联盟数据采集桌面客户端。通过
 - **并排与跟随**：客户端停靠游戏窗口侧边，跟随窗口移动与缩放；支持一键将游戏调整为 16:9 建议尺寸。
 - **多库管理**：成员库与 BOSS 库分离存储，可在界面内新建、改名、删除、导出。
 - **数据导出**：按「库名 + 时间戳」自动命名，分目录存放。
-- **可配置快捷键**：默认 F7 连接 / F3 名单 / F4 伤害 / F8 导出 / F9 跟随 / F10 设置。
+- **可配置快捷键**：默认 F7 连接 / F3 名单 / F4 伤害 / F8 导出 / F9 并排 / F10 设置 / F11 调试。
 
 ## 环境要求
 
@@ -24,14 +24,17 @@ NIKKE（胜利女神：新的希望）联盟数据采集桌面客户端。通过
 ### 使用发行版
 
 运行 `NIKKE联盟采集.exe`（单文件，无需安装），首次启动会请求管理员权限。
-首次运行会在 exe 旁边生成 `预设/` 与 `NOTICE.txt` —— 用户配置与许可声明都留在本地，
-数据本身写到「文档\嗷润吉联盟采集」。
+预设与许可声明释放到 `%APPDATA%\OrangeHelper\`，**exe 所在文件夹零残留**；
+采集结果写到「文档\嗷润吉联盟采集」。
 
 ### 从源码运行
 
 ```bat
-D:\Codex\依赖\venv-client\Scripts\python.exe -m app
+cd 07-客户端
+python -m app
 ```
+
+需要一个装了 PySide6 的 Python 环境。
 
 依赖：PySide6、RapidOCR、onnxruntime、OpenCV、NumPy、Pillow。
 
@@ -56,9 +59,12 @@ python build.py --onedir   :: 目录版，产物 dist/NIKKE联盟采集/（调�
 
 ```
 05-工具/            采集判据与识别引擎（与界面无关）
-  alliance_ocr.py   名单采集状态机（RosterMixin）
+  alliance_ocr.py   名单采集状态机（RosterMixin）+ 截图/拖动/等停稳
   raid_nav.py       页面识别与导航
-  raid_capture.py   伤害滚采与拼接
+  raid_capture.py   伤害滚采与拼接（物理位置即记录身份）
+  raid_hard.py      单屏读取层（BOSS 归一、补认）
+  raid_core.py      纯计算：卡片定位、伤害校验、拼接判据
+  raid_ocr.py       取字层：全屏检测 + 单行重认
   booklib.py        多套库的存取与迁移
 07-客户端/          桌面客户端
   app/              PySide6 界面层
@@ -74,7 +80,6 @@ python build.py --onedir   :: 目录版，产物 dist/NIKKE联盟采集/（调�
 
 ```
 预设\      导出设置.json / 昵称列预设.json / 库索引.json / 成员库\ / BOSS库\
-输出\      标定结果与运行缓存
 NOTICE.txt 许可声明
 ```
 
@@ -96,7 +101,7 @@ BOSS名单/   S19_BOSS名单_20261107_1530.csv
 ```bat
 cd 05-工具 && .venv\Scripts\python.exe roottest.py    :: 昵称库判据
 cd 05-工具 && .venv\Scripts\python.exe navtest.py     :: 页面识别与导航
-cd 05-工具 && .venv\Scripts\python.exe hardtest.py    :: 伤害解析与去重
+cd 05-工具 && .venv\Scripts\python.exe hardtest.py    :: 伤害识别 / 滚采拼接仿真 / 调速与步长闸门
 cd 05-工具 && .venv\Scripts\python.exe booktest.py    :: 多库存储
 cd 07-客户端 && python apptest.py                     :: 客户端离线自检
 cd 07-客户端 && python pathtest.py                    :: 存储与命名
