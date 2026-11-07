@@ -4987,10 +4987,19 @@ class RosterMixin:
         cur = set(self.names)
 
         added = []
+        skipped = []
         for n in cur:
             sc = self.names[n][0]
             e = names.get(n)
             if e is None:
+                # v1.37：库外的新名字，整轮**只见过 1 次** → 几乎都是边缘行的残读
+                # （实测 `が闹诊` / `EV3L2` / `RT3`：都只在某一屏的边缘露过一次）。
+                # 真成员每屏都在，滚 2 行/次时至少会被相邻几屏各见一次（`_hits ≥ 2`）。
+                # 不写进库 —— 读歪的名字一旦进了库，下一轮还会被当成"老成员"锚住，
+                # 越积越多（用户手动删过 `I-IXX`）。
+                if int(self._hits.get(n, 0)) < 2:
+                    skipped.append(n)
+                    continue
                 names[n] = {"first": now, "last": now, "rounds": 1, "miss": 0,
                             "score": sc, "alias": []}
                 # 第一次建库时整张名单都是"新增"，报了没意义
@@ -5060,6 +5069,10 @@ class RosterMixin:
                          f"{'…' if len(dropped) > 4 else ''}）")
         if alias_new:
             parts.append(f"记住 {alias_new} 个误读写法")
+        if skipped:
+            # 这些名字没进库，但必须点名 —— 用户要能判断"是不是真有个新人"
+            parts.append(f"没写进库 {len(skipped)} 个只露过一次的名字"
+                         f"（{'、'.join(skipped[:4])}{'…' if len(skipped) > 4 else ''}）")
         if parts:
             log("roster", f"本轮 {len(cur)} 人 · 库内 {len(names)} 人 · " + " · ".join(parts), "WARN")
         else:

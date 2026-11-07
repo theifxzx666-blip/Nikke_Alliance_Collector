@@ -2137,7 +2137,10 @@ class Shell(QWidget):
         self._refresh_book_sub()
         self.btn_export.setEnabled(bool(n))
         if self._follow:
-            self.table.scrollToBottom()
+            # 直接调 scrollToBottom 没用：上一行 `model.set_rows()` 刚走完
+            # beginResetModel/endResetModel，视图的布局和滚动条范围都还是旧的，
+            # 滚了个空（用户反馈「表单不跟随记录滚动」）。推到事件循环再滚。
+            QTimer.singleShot(0, self.table.scrollToBottom)
             self.follow.setText("↓ 已跟随最新")
         else:
             new = max(0, n - self._seen)

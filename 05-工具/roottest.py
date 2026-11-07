@@ -38,6 +38,16 @@ def check(name, cond, detail=""):
 class Fake:
     """只带合并/复核/入库需要的字段，UI 相关的一律空实现。"""
 
+    def set_names(self, d):
+        """模拟一次完整滚采：名字是采到的，且每屏都见过（_hits ≥ 2）。
+
+        `_roster_apply` 要求 `_hits < 2` 才允许归位（露过两次 = 真成员，不许改），
+        `_commit_roster`（v1.37）要求 `_hits ≥ 2` 才写进库。两边方向相反，
+        所以只能在具体用例里显式表态，不能给个全局默认值。
+        """
+        self.names = dict(d)
+        self._hits = {n: 3 for n in self.names}
+
     def __init__(self):
         self.names = {}
         self._hits = {}
@@ -172,7 +182,7 @@ def t_commit():
 
         # 第一轮：首次建库，不该报"新增 4 人"
         app = Fake()
-        app.names = {n: (0.99, "x") for n in A}
+        app.set_names({n: (0.99, "x") for n in A})
         app._roster_prev = {}
         rep = app._commit_roster(complete=True)
         check("首次建库不报新增", rep == "", f"实际 {rep!r}")
@@ -182,7 +192,7 @@ def t_commit():
         app = Fake()
         app._roster = json.loads(json.dumps(T.load_roster()))
         app._roster_prev = json.loads(json.dumps(app._roster["names"]))
-        app.names = {n: (0.99, "x") for n in A}
+        app.set_names({n: (0.99, "x") for n in A})
         check("人数没变 → 无变动可报", app._commit_roster(complete=True) == "")
         check("累计轮数 +1", app._roster["rounds"] == 2)
 
@@ -190,8 +200,8 @@ def t_commit():
         app = Fake()
         app._roster = json.loads(json.dumps(T.load_roster()))
         app._roster_prev = json.loads(json.dumps(app._roster["names"]))
-        app.names = {"甲一": (0.99, "x"), "乙二": (0.99, "x"),
-                     "丙三": (0.99, "x"), "戊五": (0.99, "x")}
+        app.set_names({"甲一": (0.99, "x"), "乙二": (0.99, "x"),
+                       "丙三": (0.99, "x"), "戊五": (0.99, "x")})
         rep = app._commit_roster(complete=True)
         check("报出新增 1 人", "新增 1 人" in rep and "戊五" in rep, f"实际 {rep!r}")
         check("报出未见 1 人", "没见到 1 人" in rep and "丁四" in rep, f"实际 {rep!r}")
@@ -212,7 +222,7 @@ def t_commit():
                        "names": {n: {"rounds": 3, "miss": 0, "score": .99, "alias": []}
                                  for n in A}}
         app._roster_prev = json.loads(json.dumps(app._roster["names"]))
-        app.names = {"甲一": (0.99, "x")}
+        app.set_names({"甲一": (0.99, "x")})
         app._commit_roster(complete=False)
         check("中途停下（没采全）不累加 miss",
               all(e["miss"] == 0 for e in app._roster["names"].values()))
@@ -223,7 +233,7 @@ def t_commit():
                        "names": {n: {"rounds": 3, "miss": 0, "score": .99, "alias": []}
                                  for n in A}}
         app._roster_prev = json.loads(json.dumps(app._roster["names"]))
-        app.names = {"甲一": (0.99, "x"), "乙二": (0.99, "x")}
+        app.set_names({"甲一": (0.99, "x"), "乙二": (0.99, "x")})
         app._commit_roster(complete=True)
         check("名单不到 3 人时不判退会",
               all(e["miss"] == 0 for e in app._roster["names"].values()))
@@ -238,7 +248,7 @@ def t_commit():
                                  "丙三": {"rounds": 3, "miss": 0,
                                         "score": .99, "alias": []}}}
         app._roster_prev = json.loads(json.dumps(app._roster["names"]))
-        app.names = {n: (0.99, "x") for n in ("马三一", "乙二", "丙三")}
+        app.set_names({n: (0.99, "x") for n in ("马三一", "乙二", "丙三")})
         app._fix_cnt = {("马三", "马三一"): 2}
         rep = app._commit_roster(complete=True)
         check("本轮坐实的误读写法记成别名",
