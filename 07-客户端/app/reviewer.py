@@ -110,6 +110,11 @@ def review(rows, bosses=None, roster=None) -> tuple:
                     f"{float(r['conf']):.2f} —— 多半是模糊帧，建议重采这一屏")
             else:
                 add(i, "缺字段", f"缺 {'/'.join(miss)}")
+            # 缺字段的行也要过一眼闭集：实测 23:54 的 #65 成员空、BOSS 位读成 `RT3`，
+            # 整行错位了，只报"缺 成员"看不出根因。
+            b = (r.get("boss") or "").strip()
+            if b and bset and b not in bset:
+                add(i, "BOSS 不在本期", f"「{b}」不在本期 —— 这一行多半整体错位")
             continue                      # 缺整行的不再跑后面的判据，避免噪声
         b = r["boss"]
         if bset and b not in bset:
