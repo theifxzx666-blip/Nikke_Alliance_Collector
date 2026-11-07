@@ -26,7 +26,7 @@ DIAG = "诊断"
 KINDS = (DAMAGE, ROSTER, BOSS, LOG, DIAG)
 
 # 随包素材（图标 / 收款码 / 内置背景）。打包后位于 `_internal/assets`，
-# 源码态位于 `07-客户端/assets` —— 两种布局下 parent.parent 都对。
+# 源码态位于 `client/assets` —— 两种布局下 parent.parent 都对。
 ASSETS = Path(__file__).resolve().parent.parent / "assets"
 
 # 出厂内置背景：配置里没有 bg_image 键时才用（用户点「默认」写过空串就不再回它）

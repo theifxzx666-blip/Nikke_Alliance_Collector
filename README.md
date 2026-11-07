@@ -30,7 +30,7 @@ NIKKE（胜利女神：新的希望）联盟数据采集桌面客户端。通过
 ### 从源码运行
 
 ```bat
-cd 07-客户端
+cd client
 python -m app
 ```
 
@@ -58,7 +58,7 @@ python build.py --onedir   :: 目录版，产物 dist/NIKKE联盟采集/（调�
 ## 目录结构
 
 ```
-05-工具/            采集判据与识别引擎（与界面无关）
+engine/            采集判据与识别引擎（与界面无关）
   alliance_ocr.py   名单采集状态机（RosterMixin）+ 截图/拖动/等停稳
   raid_nav.py       页面识别与导航
   raid_capture.py   伤害滚采与拼接（物理位置即记录身份）
@@ -66,7 +66,7 @@ python build.py --onedir   :: 目录版，产物 dist/NIKKE联盟采集/（调�
   raid_core.py      纯计算：卡片定位、伤害校验、拼接判据
   raid_ocr.py       取字层：全屏检测 + 单行重认
   booklib.py        多套库的存取与迁移
-07-客户端/          桌面客户端
+client/          桌面客户端
   app/              PySide6 界面层
   assets/           图标、收款码、内置背景
   发布预设/          发行版数据模板（不含任何成员数据）
@@ -99,17 +99,17 @@ BOSS名单/   S19_BOSS名单_20261107_1530.csv
 ## 测试
 
 ```bat
-cd 05-工具 && .venv\Scripts\python.exe roottest.py    :: 昵称库判据
-cd 05-工具 && .venv\Scripts\python.exe navtest.py     :: 页面识别与导航
-cd 05-工具 && .venv\Scripts\python.exe hardtest.py    :: 伤害识别 / 滚采拼接仿真 / 调速与步长闸门
-cd 05-工具 && .venv\Scripts\python.exe booktest.py    :: 多库存储
-cd 07-客户端 && python apptest.py                     :: 客户端离线自检
-cd 07-客户端 && python pathtest.py                    :: 存储与命名
+cd engine && .venv\Scripts\python.exe roottest.py    :: 昵称库判据
+cd engine && .venv\Scripts\python.exe navtest.py     :: 页面识别与导航
+cd engine && .venv\Scripts\python.exe hardtest.py    :: 伤害识别 / 滚采拼接仿真 / 调速与步长闸门
+cd engine && .venv\Scripts\python.exe booktest.py    :: 多库存储
+cd client && python apptest.py                     :: 客户端离线自检
+cd client && python pathtest.py                    :: 存储与命名
 ```
 
 ## 声明
 
-本项目为个人非商业作品。未经作者书面许可，禁止以任何方式（含使用人工智能模型对程序、字节码或运行过程进行分析、训练、推理）逆向、提取或再分发源代码。完整条款见 [NOTICE.txt](07-客户端/NOTICE.txt)。
+本项目为个人非商业作品。未经作者书面许可，禁止以任何方式（含使用人工智能模型对程序、字节码或运行过程进行分析、训练、推理）逆向、提取或再分发源代码。完整条款见 [NOTICE.txt](client/NOTICE.txt)。
 
 采集判据与「并排 + 自动导航」的交互参考了阿卡团队（Arcana）的练度采集工具，感谢其对 NIKKE 社区的贡献。
 

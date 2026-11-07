@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """客户端界面层的**离线自检**：不弹窗、不碰鼠标、不读用户的设置文件。
 
-跑法：`python apptest.py`（在 07-客户端 目录）
+跑法：`python apptest.py`（在 client 目录）
 
 为什么单独一个文件：
   · `wintest.py` 只测 `app/win.py` 的数学，跑得极快；

@@ -6,8 +6,8 @@
 
     {
       "enabled": true,
-      "cmd": ["D:/Codex/Nikke/Nikke_Skills/OCR采集/05-工具/.venv/Scripts/python.exe",
-              "D:/Codex/Nikke/Nikke_Skills/OCR采集/05-工具/外部识别_vlm.py", "{png}"],
+      "cmd": ["D:/Codex/Nikke/Nikke_Skills/OCR采集/engine/.venv/Scripts/python.exe",
+              "D:/Codex/Nikke/Nikke_Skills/OCR采集/engine/外部识别_vlm.py", "{png}"],
       "timeout": 30
     }
 

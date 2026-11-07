@@ -9,7 +9,7 @@
 ## 边界
 
 **只做**：
-1. **联盟数据采集工具**（`05-工具\`）——截屏 + 本地 OCR + 自动滚采，产出两类数据：
+1. **联盟数据采集工具**（`engine\`）——截屏 + 本地 OCR + 自动滚采，产出两类数据：
    · 联盟成员名单（主界面）
    · 联盟突袭伤害记录（【伤害记录】打开的独立窗口）
 2. **ArcanaHelper 客户端逆向分析**（`01-原始样本` ~ `04-复用方案`）——**已结题**，只作参考资料，不再推进。
@@ -22,10 +22,10 @@
 
 | 线 | 目录 | 状态 | 说明 |
 | :--- | :--- | :-: | :--- |
-| **联盟名单采集（活的）** | `05-工具\` | 🟢 | GUI 工具，可打包 exe |
-| **伤害记录 · 普通模式** | `05-工具\raid_window.py` | 🟢 | 独立窗口，复用 alliance_ocr 的截图/滚动/窗口层 |
-| **伤害记录 · 困难模式（demo）** | `05-工具\hard_client.py` | 🟡 | Tk 版，判据在 `raid_capture.py` |
-| **正式客户端 v1.1** | `07-客户端\` | 🟢 | PySide6 单进程；伤害页采集/导航/框选/导出 + 并排跟随 + 全局热键 + 窗口可拉伸；**名单页只是拉起旧工具**（引擎未迁移）；入口 `07-客户端\启动.bat` |
+| **联盟名单采集（活的）** | `engine\` | 🟢 | GUI 工具，可打包 exe |
+| **伤害记录 · 普通模式** | `engine\raid_window.py` | 🟢 | 独立窗口，复用 alliance_ocr 的截图/滚动/窗口层 |
+| **伤害记录 · 困难模式（demo）** | `engine\hard_client.py` | 🟡 | Tk 版，判据在 `raid_capture.py` |
+| **正式客户端 v1.1** | `client\` | 🟢 | PySide6 单进程；伤害页采集/导航/框选/导出 + 并排跟随 + 全局热键 + 窗口可拉伸；**名单页只是拉起旧工具**（引擎未迁移）；入口 `client\启动.bat` |
 | ArcanaHelper 逆向（结题） | `00-任务书` / `01-原始样本` / `02-拆包` / `03-分析` / `04-复用方案` / `_tools\` | ⚪ | 纯静态分析，**不运行原 exe、不联网** |
 
 > `_tools\pylib_ocr`（RapidOCR + onnxruntime + 模型，约 290 MB）与 `_tools\pylib`（numpy + Pillow）是**复现实验用依赖**，非交付物，不跑实验时整目录可删。
@@ -36,17 +36,17 @@
 
 | 项 | 值 |
 | :--- | :--- |
-| 正常启动 | `05-工具\启动.bat`（静默，无黑框） |
-| 排障启动 | `05-工具\调试启动.bat`（保留控制台看报错） |
-| 重建环境 | `05-工具\安装环境.bat`（重建 `.venv`，1~3 分钟） |
-| 依赖环境 | `05-工具\.venv`（**工位自带，不用** `F:\Codex\依赖`） |
-| 依赖锁 | `05-工具\requirements-lock.txt`（28 包精确版本，**换设备重建时优先用它**，别用 `安装环境.bat` 的不锁版本安装） |
-| 主程序 | `05-工具\alliance_ocr.py`（竖版界面） |
+| 正常启动 | `engine\启动.bat`（静默，无黑框） |
+| 排障启动 | `engine\调试启动.bat`（保留控制台看报错） |
+| 重建环境 | `engine\安装环境.bat`（重建 `.venv`，1~3 分钟） |
+| 依赖环境 | `engine\.venv`（**工位自带，不用** `F:\Codex\依赖`） |
+| 依赖锁 | `engine\requirements-lock.txt`（28 包精确版本，**换设备重建时优先用它**，别用 `安装环境.bat` 的不锁版本安装） |
+| 主程序 | `engine\alliance_ocr.py`（竖版界面） |
 | 伤害记录（普通） | 主界面工具行【伤害记录】→ `raid_window.py`（独立窗口，复用 alliance_ocr 的截图/滚动/窗口层） |
-| 伤害记录（困难） | `05-工具\hard_client.py`，或桌面 `NIKKE困难采集.bat`（GBK + 自提权 + pythonw） |
-| **正式客户端** | 打包版 `07-客户端\dist\NIKKE联盟采集.exe`（单文件）；源码态 `07-客户端\启动.bat`；`python -m app --shot x.png` 只出图自检（不连游戏） |
-| 输出 | `05-工具\输出\`（含 `界面_竖版.png` 等） |
-| 打包 | `07-客户端\build.py` → `07-客户端\dist\NIKKE联盟采集.exe`（单文件，136 MB）；`--onedir` → `dist\NIKKE联盟采集\`（调试用）；旧工具 `05-工具\打包.py` → `05-工具\dist\` |
+| 伤害记录（困难） | `engine\hard_client.py`，或桌面 `NIKKE困难采集.bat`（GBK + 自提权 + pythonw） |
+| **正式客户端** | 打包版 `client\dist\NIKKE联盟采集.exe`（单文件）；源码态 `client\启动.bat`；`python -m app --shot x.png` 只出图自检（不连游戏） |
+| 输出 | `engine\输出\`（含 `界面_竖版.png` 等） |
+| 打包 | `client\build.py` → `client\dist\NIKKE联盟采集.exe`（单文件，136 MB）；`--onedir` → `dist\NIKKE联盟采集\`（调试用）；旧工具 `engine\打包.py` → `engine\dist\` |
 
 **使用流程**：开游戏 → 工具里选窗口 → 点【采集本屏】或【自动滚采】→ 滚动后自动累加去重 → 台账看变动。
 
@@ -59,7 +59,7 @@
 **L1 · 改判据只跑这一层**（不弹窗、不碰光标、不加载 OCR 模型，合计数秒）
 
 ```bash
-cd 05-工具
+cd engine
 python roottest.py      # 昵称库七道闸 + 库不许影响相似名判定
 python deduptest.py     # 真实日志回放：合并/复核/裁剪（不带参数自动取最新日志）
 python churntest.py     # 成员变动
@@ -72,7 +72,7 @@ python navtest.py       # 导航页指纹（含 raid_nav 的 record/guild/home �
 python hardtest.py      # 困难模式：到底判定 / 末尾回填 / BOSS 归一 / 重复 BOSS
 ```
 
-**客户端的 L1**（在 `07-客户端` 下跑，不弹窗、不碰游戏窗口）：
+**客户端的 L1**（在 `client` 下跑，不弹窗、不碰游戏窗口）：
 
 ```bash
 python wintest.py       # 20 项：16:9 / 并排 / 缩游戏 / 跟随判定

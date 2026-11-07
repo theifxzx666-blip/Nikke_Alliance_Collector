@@ -3303,11 +3303,11 @@ def _client_win_h(default: int = 940) -> int:
     """正式客户端持久化的窗口高度（导出设置.json 的 win_h），读不到给 default。
 
     客户端的 SETTINGS_PATH = alliance_ocr.APP_DIR / "预设" / "导出设置.json"
-    （07-客户端/app/store.py 复用本模块的 APP_DIR），所以第一候选就是它；
-    再兜一个 07-客户端/预设/。只认 400~3000 的值，别把损坏文件里的 0 当高度用。
+    （client/app/store.py 复用本模块的 APP_DIR），所以第一候选就是它；
+    再兜一个 client/预设/。只认 400~3000 的值，别把损坏文件里的 0 当高度用。
     """
     for p in (APP_DIR / "预设" / "导出设置.json",
-              APP_DIR.parent / "07-客户端" / "预设" / "导出设置.json",
+              APP_DIR.parent / "client" / "预设" / "导出设置.json",
               APP_DIR / "导出设置.json"):
         try:
             v = int(json.loads(p.read_text(encoding="utf-8")).get("win_h"))
@@ -5349,7 +5349,7 @@ class App(tk.Tk, RosterMixin):
         super().__init__()
         self.title("NIKKE 联盟名单采集")
         # 竖版：贴在游戏窗口侧边常驻时不抢横向空间（对齐阿卡客户端 616×839 的形制）。
-        # 默认高度跟随正式客户端（07-客户端/导出设置.json 的 win_h，2026-11-07 用户要求）：
+        # 默认高度跟随正式客户端（client/导出设置.json 的 win_h，2026-11-07 用户要求）：
         # 两个窗口并排时高度一致；读不到（没装客户端/文件损坏）保持旧值 940。
         self.geometry(f"620x{_client_win_h()}")
         self.minsize(560, 700)

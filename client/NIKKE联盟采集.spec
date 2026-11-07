@@ -22,7 +22,7 @@ ONE_FILE = os.environ.get("NIKKE_ONEFILE") == "1"
 # 这种包不能发 —— 采集要向游戏窗口注入鼠标，没有同级权限必失败。
 NOADMIN = os.environ.get("NIKKE_NOADMIN") == "1"
 NAME = "NIKKE联盟采集" + ("_dev" if NOADMIN else "")
-ENGINE = os.path.join(os.path.dirname(HERE), "05-工具")
+ENGINE = os.path.join(os.path.dirname(HERE), "engine")
 
 _DROP = re.compile(
     r"(opencv_videoio_ffmpeg|Qt6Quick|Qt6Qml|[\\/]qml[\\/]|[\\/]translations[\\/])",

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """数据目录与命名规则的自检（v1.18）。
 
-    ..\\05-工具\\.venv\\Scripts\\python.exe pathtest.py
+    ..\\engine\\.venv\\Scripts\\python.exe pathtest.py
 
 只验纯逻辑：不写用户目录（用临时根），不碰游戏。
 """

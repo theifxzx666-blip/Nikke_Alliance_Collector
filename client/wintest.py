@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
 """窗口控制（16:9 / 并排 / 跟随判定）的纯逻辑测试：不碰真实窗口，只验数学。
 
-跑法：`python wintest.py`（在 07-客户端 目录）
-为什么单独放这里：`app/win.py` 是客户端专有逻辑，05-工具 那套测试不该依赖 Qt。
+跑法：`python wintest.py`（在 client 目录）
+为什么单独放这里：`app/win.py` 是客户端专有逻辑，engine 那套测试不该依赖 Qt。
 """
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from app import win as W  # noqa: E402  （导入 app 包会先执行 __init__，把 05-工具 挂进 sys.path）
+from app import win as W  # noqa: E402  （导入 app 包会先执行 __init__，把 engine 挂进 sys.path）
 
 FAIL = []
 

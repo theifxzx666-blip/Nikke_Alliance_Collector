@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """多套库（成员库 / BOSS 库）的离线自检。
 
-跑法：`python booktest.py`（在 05-工具 目录）
+跑法：`python booktest.py`（在 engine 目录）
 
 全套都在**临时目录**里跑：booklib 的路径常量被重定向，真实预设/一动不动。
 """

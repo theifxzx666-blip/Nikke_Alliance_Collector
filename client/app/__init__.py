@@ -14,7 +14,7 @@
 #
 #  完整条款见随包分发的 NOTICE.txt。
 # ============================================================================
-"""客户端包入口：把引擎目录（05-工具）挂进 sys.path。
+"""客户端包入口：把引擎目录（engine）挂进 sys.path。
 
 客户端与旧工具共用同一套采集判据，直接 import，不复制代码。
 打包后引擎模块已在包内，这段只在源码态生效。
@@ -22,6 +22,6 @@
 import sys
 from pathlib import Path
 
-_ENGINE_DIR = Path(__file__).resolve().parents[2] / "05-工具"
+_ENGINE_DIR = Path(__file__).resolve().parents[2] / "engine"
 if _ENGINE_DIR.is_dir() and str(_ENGINE_DIR) not in sys.path:
     sys.path.insert(0, str(_ENGINE_DIR))

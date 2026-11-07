@@ -8,12 +8,12 @@ build_dev/
 __pycache__/
 
 # ---- 运行时数据（含真实联盟名单，禁止入库）----
-05-工具/预设/
-05-工具/输出/
-07-客户端/dist/
-07-客户端/build/
-07-客户端/spike/
-07-客户端/_*.png
+engine/预设/
+engine/输出/
+client/dist/
+client/build/
+client/spike/
+client/_*.png
 垃圾箱/
 
 # ---- 本地环境 ----
@@ -28,8 +28,8 @@ OCR采集_迁移包_*.zip
 SHA256.txt
 
 # ---- 图标中间产物（保留 jpg/ico/background）----
-07-客户端/assets/aorunji.png
-07-客户端/assets/aorunji_256.png
+client/assets/aorunji.png
+client/assets/aorunji_256.png
 
 # ---- 过程资料（不随产品发布）----
 .workbuddy/
@@ -40,4 +40,4 @@ SHA256.txt
 清单.txt
 
 # ---- 本地快照（含 exe，禁止入库）----
-05-工具/备份/**
+engine/备份/**

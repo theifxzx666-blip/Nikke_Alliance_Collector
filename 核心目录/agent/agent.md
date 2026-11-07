@@ -10,11 +10,11 @@
 
 ## 0. 一句话现状
 
-**正式客户端 v1.59.3 Beta**：`07-客户端/`（PySide6），把原先三个 Tk 客户端合并为一个
-程序（名单 + HARD 伤害），采集判据仍在 `05-工具/`，客户端通过 `RosterMixin` 直接持有。
+**正式客户端 v1.59.3 Beta**：`client/`（PySide6），把原先三个 Tk 客户端合并为一个
+程序（名单 + HARD 伤害），采集判据仍在 `engine/`，客户端通过 `RosterMixin` 直接持有。
 
 - 发行仓：<https://github.com/theifxzx666-blip/Nikke_Alliance_Collector>
-- 产物：`07-客户端/dist/NIKKE联盟采集.exe` —— **单文件 136 MB**，发出去只发这一个；
+- 产物：`client/dist/NIKKE联盟采集.exe` —— **单文件 136 MB**，发出去只发这一个；
   内嵌 requireAdministrator 清单，启动解压约 8~9 s
 - 目录版：`python build.py --onedir` → `dist/NIKKE联盟采集/`（调试用，约 2 s 启动）
 - **运行数据**：`%APPDATA%\OrangeHelper\`（预设 / 库 / 配置 / 许可），exe 旁边零残留；
@@ -90,7 +90,7 @@ v1.59 里定位用 `_offset_from_content`（重叠行反算、取中位数、多
 ## 1. 文件地图
 
 ```
-05-工具/
+engine/
 ├── alliance_ocr.py     底层 + 名单采集主程序（截图/拖动/等停稳/测位移/昵称库/UI）
 ├── ui_kit.py           日志面板、步骤条、台账等控件
 ├── raid_core.py        纯计算：定位卡片 / 伤害校验 / 拼接 splice / 等级解析
@@ -114,7 +114,7 @@ v1.59 里定位用 `_offset_from_content`（重叠行反算、取中位数、多
 |---|---|
 | 名单采集 | `启动.bat`（静默）/ `调试启动.bat`（留控制台） |
 | 困难模式 | 桌面 `NIKKE困难采集.bat`（GBK 编码 + 自提权 + pythonw） |
-| 环境 | `05-工具\.venv`（Python 3.12.13，28 包按 `requirements-lock.txt`） |
+| 环境 | `engine\.venv`（Python 3.12.13，28 包按 `requirements-lock.txt`） |
 | 打包 | `打包.py` → `dist\NIKKE联盟采集.exe`（115 MB，45 s） |
 
 **权限**：游戏以管理员运行时，普通权限进程的鼠标注入会被 UIPI **静默丢弃**——
@@ -286,19 +286,19 @@ calibtest.py           标定换算
 **待验证**：真机从"不在联盟页"开始，能一路点到记录页并自动出 6 条；任何一步失败要有明确说明。
 
 ### P2 正式客户端 —— 设计定稿，M0 已过，待开 M1（2026-11-07）
-设计文档：`07-客户端/客户端设计-v1.md`；界面原型：`07-客户端/mockup.html`；
-打包 spike：`07-客户端/spike/`（`app.py` + `build.py`，产物 `dist/nikke_spike/`）。
+设计文档：`client/客户端设计-v1.md`；界面原型：`client/mockup.html`；
+打包 spike：`client/spike/`（`app.py` + `build.py`，产物 `dist/nikke_spike/`）。
 
 **已核实并锁死的技术前提**：
 - PySide6 **6.12.0**（Qt 官方：Win10 1809+，且 6.12 是最后一个支持 Win10 的版本），Python 3.12.13。
-- 客户端环境：`D:\Codex\依赖\venv-client`（PySide6 + 引擎全套依赖，与 `05-工具\.venv` 隔离）。
+- 客户端环境：`D:\Codex\依赖\venv-client`（PySide6 + 引擎全套依赖，与 `engine\.venv` 隔离）。
 - 模糊/圆角**自绘**，不依赖 Mica/Acrylic —— Win10 上没有这些系统能力。
 - 本机缩放是 **150%**（DPR=1.5），此前写"200%"是错的。
 
 **M0 打包实测**：PyInstaller onedir 359 MB → 裁剪（cv2 ffmpeg / Qt Quick+Qml / translations）
 → **310 MB**；exe 跑通，引擎 0.72 s，识别正确，无残留进程。
 
-**M1 壳层（2026-11-07 已完成）**：`07-客户端/app/`（theme/widgets/shell/main）。
+**M1 壳层（2026-11-07 已完成）**：`client/app/`（theme/widgets/shell/main）。
 令牌表 + 分段切换 + 设置抽屉 + 日志跟随 + **启动布局体检**。
 体检抓到 3 个真问题：QSpinBox 96px 但需要 99px、抽屉半透明漏底、抽屉挂错父控件下移 40px。
 体检做了负向验证（压窄控件能报出来），不是空检查。
@@ -319,7 +319,7 @@ calibtest.py           标定换算
 
 待用户拍板：① 普通模式伤害是否进 v1；② 底部是否常驻"最近导出"路径；③ F3/F4 用切换式还是按住式。
 
-**M2 接线（2026-11-07 已完成）**：新增 `05-工具/raid_capture.py`（`CaptureEngine`），
+**M2 接线（2026-11-07 已完成）**：新增 `engine/raid_capture.py`（`CaptureEngine`），
 把裁剪/拖动/量位移/拼接/到底/回填/整条滚采从 Tk 窗口里抽出来，**零 UI 依赖**；
 `HardClient` 与 Qt 的 `app/engine.py` 都继承它 —— 判据只有一份。
 Qt 侧另加 `app/picker.py`（框选覆盖层）、`app/engine.py`（绑窗口/区域换算/后台线程/信号）。
@@ -461,9 +461,9 @@ Qt 侧另加 `app/picker.py`（框选覆盖层）、`app/engine.py`（绑窗口/
 
 ### 2026-11-07 13:05 M4：16:9 / 吸附 / 高度跟随（并发现一个硬限制）
 
-新增 `07-客户端/app/win.py`，把窗口控制拆成「纯计算 + Win32 动作」两层：
+新增 `client/app/win.py`，把窗口控制拆成「纯计算 + Win32 动作」两层：
 `plan_aspect` / `fix_aspect` / `plan_snap`（纯函数）/ `snap`。
-配套 `07-客户端/wintest.py` 11 项纯逻辑测试（16:9 三种形态、四种吸附位、越界夹取）。
+配套 `client/wintest.py` 11 项纯逻辑测试（16:9 三种形态、四种吸附位、越界夹取）。
 
 **坐标系**：Win32 物理像素（本机 150%），Qt 逻辑像素。模块内全按物理算，只把结果换算成逻辑给 Qt。
 
@@ -477,7 +477,7 @@ Qt 侧另加 `app/picker.py`（框选覆盖层）、`app/engine.py`（绑窗口/
 `snap` 的策略顺序：右侧放得下 → 右侧；放不下 → 把游戏左移腾位置；挪不动 → 左侧；
 两边都不行 → 贴屏幕右缘并标 `overlap`，由调用方决定是否真的贴（默认拒绝）。
 
-**启动脚本补了自提权**：`07-客户端/启动.bat` 与 `调试启动.bat` 先 `net session` 判权限，
+**启动脚本补了自提权**：`client/启动.bat` 与 `调试启动.bat` 先 `net session` 判权限，
 非管理员就 `Start-Process -Verb RunAs` 重启自己。原因同上：M4 的改尺寸/挪窗口
 和采集的鼠标注入，都要求本程序与游戏同级权限。脚本仍是 GBK + CRLF + 无 BOM。
 
@@ -488,11 +488,11 @@ Qt 侧另加 `app/picker.py`（框选覆盖层）、`app/engine.py`（绑窗口/
 `CaptureEngine` 为此加了两个只读快照 `last_pitch` / `last_splice`，不影响判据。
 体检又抓到一个真问题：`16:9 ✓` 徽标需 59px 实际 55px → `_set_badge` 按字体实测给宽。
 
-**打包**：`07-客户端/build.py` 一条命令（打包→裁剪→铺预设→自检）。
+**打包**：`client/build.py` 一条命令（打包→裁剪→铺预设→自检）。
 产物 `dist\NIKKE联盟采集\NIKKE联盟采集.exe`，359 MB → 裁 49 MB → **310 MB**；
 预设四项铺在 exe 同级；内嵌 `requireAdministrator` 清单（双击即 UAC）。
 
-**拆分**：新增 `05-工具/raid_hard.py`（BOSS 表/归一/read_hard/MAX_SCREENS），
+**拆分**：新增 `engine/raid_hard.py`（BOSS 表/归一/read_hard/MAX_SCREENS），
 `raid_capture` 与客户端 engine 都从这里取。**但 alliance_ocr 顶部仍 import tkinter**，
 所以 exe 里还带着 Tk（约 20 MB）—— 这是明确的欠账，不是"已解决"。
 
@@ -522,7 +522,7 @@ build.py 重打包 310 MB 静态校验通过。venv-client 是客户端解释器
 规格见 客户端设计-v1.md §12。三条：
 1. **旧名单工具默认高度**：App.geometry 由 620x940 → `620x{_client_win_h()}`，
    读 alliance_ocr.APP_DIR/预设/导出设置.json 的 win_h（客户端 SETTINGS_PATH 就在那，
-   07-客户端/app/store.py 复用本模块 APP_DIR）。minsize 高 800→700。宽度 620 不动。
+   client/app/store.py 复用本模块 APP_DIR）。minsize 高 800→700。宽度 620 不动。
 2. **突袭主页指纹**：which_page 加 "raid"（on_record_page 不中 + 「联盟记录」token 命中；
    真实概览截图核过无该 token）。goto_record 站在 raid 直达 _enter_record（从原尾部
    提取），goto_home 认出 raid 打说明不再傻按。修复"进突袭主页识别不到、一直要求回主页"。
@@ -542,7 +542,7 @@ headless 桥验证（ensure/withdraw/空导出）通过；打包 310 MB 静态�
 
 ### 2026-11-07 16:45 v1.3：多套库（成员库 / BOSS 库）+ Q区/V区 真实导入
 
-规格 §13。核心：`05-工具/booklib.py`（新，**不 import alliance_ocr**，自带 _app_dir 避免环）：
+规格 §13。核心：`engine/booklib.py`（新，**不 import alliance_ocr**，自带 _app_dir 避免环）：
 `预设/库索引.json` + `预设/成员库/<名>.json` + `预设/BOSS库/<名>.json`；
 `ensure_migrated()` 幂等把旧 昵称库.json→成员库/默认.json、盟战boss表 seasons→每期一套（原文件不删）。
 alliance_ocr 的 ROSTER 四处（load/save/诊断包/打开目录）改 `booklib.roster_path()`；
@@ -588,7 +588,7 @@ apptest 也重定向了 booklib。**以后任何测试动库前，先确认 book
   nav_to_members/_nav_*/_probe_total/_confirm_scene/_begin_auto/_wait_still/_save_cfg 等。
   `class App(tk.Tk, RosterMixin)`；App 实现 Tk 版钩子（messagebox/info_var/winfo_exists/
   btn_nav/raise）。
-- `07-客户端/app/roster_engine.py`（新）：`RosterEngine(QObject, RosterMixin)`，
+- `client/app/roster_engine.py`（新）：`RosterEngine(QObject, RosterMixin)`，
   **不建 Tk**（实测 _default_root is None）。钩子 → Qt 信号；`after`=QTimer.singleShot；
   `_post`=_call_sig 跨线程排队。心跳 200ms 播 _continuous / names。
 - 删除 `app/roster_bridge.py`。
@@ -778,7 +778,7 @@ booktest 36 / deduptest 21 全绿。打包 311 MB。
 
 ### 2026-11-07 19:20 v1.18：数据存储与命名规范
 
-- 新 `07-客户端/app/paths.py`：数据根 + 五类子目录（伤害统计/成员名单/BOSS名单/日志/诊断）。
+- 新 `client/app/paths.py`：数据根 + 五类子目录（伤害统计/成员名单/BOSS名单/日志/诊断）。
   **只让用户选根**，子目录自动建。默认根 `文档\嗷润吉联盟采集`（打包装 Program Files 时那里不可写）。
 - 命名（v1.18 规范，改动任何产出一律走 paths）：
   - 伤害统计 `S19嗷润吉Q区_伤害统计_YYYYMMDD_HHMM.csv`（BOSS库在前、成员库紧跟）
@@ -921,7 +921,7 @@ pathtest / wintest 全绿；`--shot` 0 异常；打包 311 MB。
   （换算要窗口的高与宽高比，`prepare()` 阶段还没窗口）。
 - 文案：比例对不上时要**说清哪一边不对**（"内置预设是在 1220x686 上标的，
   当前窗口宽高比 1.333 对不上"），不要笼统说"调成 16:9"。
-- ⚠ **为什么开发机一直没暴露**：源码态 `05-工具/预设/昵称列预设.json` 一直在，
+- ⚠ **为什么开发机一直没暴露**：源码态 `engine/预设/昵称列预设.json` 一直在，
   且 `输出/区域.json`（开发机标定过）走了快路径，第二级回退从来没执行。
   **只在干净机器上才踩得到** —— 以后测"新用户首启"必须清空 `输出/` 和预设。
 
@@ -959,9 +959,9 @@ pathtest / wintest 全绿；`--shot` 0 异常；打包 311 MB。
 - 参考程序实测布局（**只读目录，没运行它**，AGENTS 红线）：
   `%APPDATA%\ArcanaHelper\{config.json, log\, log\pic\, log-<id>.zip, <时间戳>\temp\}`
   —— exe 旁边零残留。
-- 新增 `05-工具/appdir.py`，只提供 `app_dir()`：
+- 新增 `engine/appdir.py`，只提供 `app_dir()`：
   冻结态 exe 旁**已有** `预设/` → 便携模式用它；否则 `%APPDATA%\OrangeHelper`。
-  源码态 = `05-工具`。
+  源码态 = `engine`。
 - ⚠ **必须抽成独立文件**：`alliance_ocr` 与 `booklib` 互相 import（前者用后者路径、
   后者用前者判据），各写一份 `_app_dir()` 必然漂移 —— 漂了就是"预设在一处、
   成员库在另一处"，用户看到的是名单一夜之间没了。
@@ -1027,7 +1027,7 @@ v1.26 交付后第一次真机：BOSS 列已经只出现 5 个标准名、缺字
   `UCOLVED`(7) / `HGOLIVER`(8) 直接 False；③ 阈值 0.62，真实值只有 0.50 / 0.53。
 - 用真实库核对：`UCOLVED` → 最像 `HGOLIVER` 0.53、`蕭白` → 最像 `萧白` 0.50，
   用户两个判断都成立。
-- 修：新增 `05-工具/zh.py`（~120 字常见繁简映射），`roster_cand` 在长度判断**之前**
+- 修：新增 `engine/zh.py`（~120 字常见繁简映射），`roster_cand` 在长度判断**之前**
   加繁简归一 —— 繁简不是"模糊"，归一后完全相同和字面命中同级，两字名也能走。
 - **没放开两字名模糊归档**：`大白`/`萧白` 也是 0.5，但那是两个真人。防误伤优先。
 - 复核的「成员不在库」加"最像谁（相似度）"，阈值 0.5 —— 再低就是瞎猜
@@ -1359,7 +1359,7 @@ image-stitch README 里"不要在没有内容的区域找重叠"的同一条。
 目标是把困难伤害采集做成**唯一入口**的正式客户端：PySide6、竖版、HARD 优先、
 F 区快捷键、实时跟随、强制 16:9。
 
-结论：**判据不动，只换宿主**。所有采集逻辑留在 `05-工具/`，客户端只做窗口与交互。
+结论：**判据不动，只换宿主**。所有采集逻辑留在 `engine/`，客户端只做窗口与交互。
 
 ### 阶段三：真机驱动的十一轮修复（v1.1 → v1.9）
 
@@ -1398,7 +1398,7 @@ F 区快捷键、实时跟随、强制 16:9。
 
 ### 阶段五：发布（v1.22，2026-11-07）
 
-- 发行数据源与开发数据彻底隔离：`07-客户端/发布预设/`，打包前硬断言"成员库 0 人"。
+- 发行数据源与开发数据彻底隔离：`client/发布预设/`，打包前硬断言"成员库 0 人"。
 - 全新安装首启验证：成员库「示例 0 人」、BOSS 库 26 套、内置背景生效。
 - 图标圆角化（4× 遮罩再缩回）、`NOTICE.txt` 随包、源码版权头。
 - 仓库：<https://github.com/theifxzx666-blip/Nikke_Alliance_Collector>（140 文件，源码 + 发行预设）。

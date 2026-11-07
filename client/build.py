@@ -23,10 +23,10 @@ HERE = Path(__file__).resolve().parent
 NAME = "NIKKE联盟采集"
 
 # %APPDATA% 下的目录名：从 appdir 取，不在这里抄第二份（抄了必然漂移）
-sys.path.insert(0, str(HERE.parent / "05-工具"))
+sys.path.insert(0, str(HERE.parent / "engine"))
 try:
     from appdir import APP_NAME as APP_FOLDER
-except Exception:                      # 只在 05-工具 缺失时兜底
+except Exception:                      # 只在 engine 缺失时兜底
     APP_FOLDER = "OrangeHelper"
 SPEC = HERE / f"{NAME}.spec"
 DIST_DIR = HERE / "dist"
@@ -35,7 +35,7 @@ EXE = DIST_DIR / f"{NAME}.exe"              # 单文件产物
 
 ONEFILE = "--onedir" not in sys.argv
 
-# 发行版数据源：`发布预设/` 是**唯一**来源，与开发机上的用户数据（05-工具/预设）
+# 发行版数据源：`发布预设/` 是**唯一**来源，与开发机上的用户数据（engine/预设）
 # 彻底隔离。开发目录里有真实联盟名单，直接打包会泄漏给使用者。
 RELEASE = HERE / "发布预设"
 
