@@ -1425,6 +1425,7 @@ class Shell(QWidget):
             self.say("写库失败（目录权限？）")
             return
         self._load_roster_table()
+        self._reload_books()
         self.say(f"已把「{new}」加进「{book}」· 现在 {len(names)} 人")
 
     def _edit_roster_row(self):
@@ -1462,6 +1463,7 @@ class Shell(QWidget):
             self.say("写库失败（目录权限？）")
             return
         self._load_roster_table()
+        self._reload_books()
         self.say(f"已把「{old}」改成「{new}」· 下次采集按新的归位")
 
     def _del_roster_row(self):
@@ -1484,6 +1486,7 @@ class Shell(QWidget):
             data["names"] = names
             BK.write_roster(name, data, activate=False)
             self._load_roster_table()
+            self._reload_books()
             self.say(f"已从「{name}」删除「{old}」")
 
     def _refresh_book_sub(self):

@@ -319,23 +319,10 @@ class RosterEngine(QObject, RosterMixin):
             self._roster_apply()
         except Exception as e:
             return 0, f"收工对账失败：{e}"
-        rows = self.names_rows()
-        # v1.18：<根>/成员名单/嗷润吉Q区_成员名单_20261107_1530.csv
-        try:
-            import booklib as BK
-            book = BK.active_roster()
-        except Exception:
-            book = ""
-        out = P.sub(P.ROSTER) / P.roster_file(book)
-        try:
-            with open(out, "w", encoding="utf-8-sig", newline="") as f:
-                w = csv.writer(f)
-                w.writerow(["序号", "昵称", "置信度"])
-                for r in rows:
-                    w.writerow([r["idx"], r["member"], r["conf"]])
-        except Exception as e:
-            return 0, str(e)
-        S.save_settings(last_export=str(out))
+        # v1.35：对账（这一步才把采集结果写进库）之后，**从库读**再导出。
+        # 以前用 `self.names_rows()` —— 那是采集那一刻的快照，用户随后在表格里
+        # 加人 / 改名 / 删除，写进去的是库文件，导出却还按旧快照走，等于白改。
+        return export_book_csv()
         return len(rows), out
 
     # ---------------- 状态广播（QTimer 轮询，避免每处手工 emit）

@@ -25,6 +25,7 @@ from collections import Counter, defaultdict
 # 可疑标签（顺序即报告里的排列顺序）
 CODES = (
     "缺字段",
+    "疑似坏行",
     "BOSS 不在本期",
     "血量不单调",
     "伤害异常",
@@ -59,6 +60,21 @@ def _nearest(text, names):
     return best, score
 
 
+def _looks_garbage(r, miss) -> bool:
+    """整行读歪（多半是模糊帧）：缺 BOSS、血量也没读到、置信度还低。
+
+    实测 2026-11-07 三条：名字读成 `th7` / `DFY` / `可7我7`，伤害串带多余空格或
+    前导 0（`0 550 014 075`），BOSS 与剩余血量全空，conf 0.51~0.72。
+    正常的一行至少 BOSS 和血量能读到一个 —— 两个都空说明整行没对准。
+    """
+    if "BOSS" not in miss:
+        return False
+    if (r.get("pct") or "").strip():
+        return False
+    conf = r.get("conf")
+    return conf is not None and float(conf) < 0.75
+
+
 def review(rows, bosses=None, roster=None) -> tuple:
     """整表复核。返回 `(findings, summary)`。
 
@@ -86,8 +102,15 @@ def review(rows, bosses=None, roster=None) -> tuple:
         if r.get("damage") is None:
             miss.append("伤害")
         if miss:
-            add(i, "缺字段", f"缺 {'/'.join(miss)}")
-            continue                      # 缺字段的行不再跑后面的判据，避免噪声
+            # 整行读歪（模糊帧）比"缺一个字段"严重得多，分开报 —— 前者要重采，
+            # 后者只是那一格没认出来。不自动删：万一是真新成员只露了一次。
+            if _looks_garbage(r, miss):
+                add(i, "疑似坏行",
+                    f"{r.get('member')} · BOSS 和血量都没读到 · conf 只有 "
+                    f"{float(r['conf']):.2f} —— 多半是模糊帧，建议重采这一屏")
+            else:
+                add(i, "缺字段", f"缺 {'/'.join(miss)}")
+            continue                      # 缺整行的不再跑后面的判据，避免噪声
         b = r["boss"]
         if bset and b not in bset:
             add(i, "BOSS 不在本期", f"「{b}」不在本期 {'/'.join(bosses)} 里")

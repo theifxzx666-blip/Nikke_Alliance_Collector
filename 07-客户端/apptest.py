@@ -1018,6 +1018,20 @@ def main():
     check("降分只在发出去的那份副本上（patch 判定要用原始分）",
           _live[1]["conf"] == 0.9, str(_live[1]["conf"]))
 
+    # ---------------- 5y. v1.35：整行读歪 vs 只缺一格
+    # 真机 23:14：`可7我7` 伤害 11150 000 000、BOSS 空、血量空、conf 0.51
+    _f9, _ = _RV.review([
+        {"member": "可7我7", "boss": "", "damage": 11150000000, "pct": "", "conf": 0.51},
+        {"member": "正常", "boss": "", "damage": 100, "pct": "50.0%", "conf": 0.92},
+    ], _B, None)
+    _c9 = [f["code"] for f in _f9]
+    check("整行读歪 → 疑似坏行", "疑似坏行" in _c9, str(_c9))
+    check("只缺 BOSS 但血量读到 → 仍是缺字段", "缺字段" in _c9, str(_c9))
+    check("高置信度的缺 BOSS 不算坏行",
+          "疑似坏行" not in [f["code"] for f in _RV.review(
+              [{"member": "甲", "boss": "", "damage": 1, "pct": "", "conf": 0.95}],
+              _B, None)[0]], "")
+
     # 键名不再写死 F2
     check("提示文案取当前键位（F7）", KEYS.current("attach") == "F7",
           KEYS.current("attach"))
