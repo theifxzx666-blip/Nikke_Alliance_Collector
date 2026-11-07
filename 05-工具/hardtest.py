@@ -384,21 +384,22 @@ check("_quota_after 会先去重",
           [_rec("小卡卡", "医师", 100, "50.0%"), _rec("小卡卡", "医师", 100, "50.0%")],
           "小卡卡") == 1, "")
 
-# ---------------- v1.54 严格第二遍：从头扫一遍 + 位置校准 ----------------
+# ---------------- v1.56 滚动采集：位置就是身份 ----------------
 #
-# 这一段是新建的循环（正向那套 200 多行没动），最容易错的是两处：
-#   · `_gy` 落不到第一遍的坐标系里（两遍拖动次数不同就整体偏几行）
-#   · 补进的行插错位置
-# 所以用一个"12 条、每屏 6 条、每次滚 2 条"的假画面跑一遍，且**故意让第二次
-# 的位移读数偏 10px/次**（正向有过"加大步长再试一次"，两遍步数天然会不一致）。
+# 这一段仿真整条 `capture`（12 条 / 每屏 6 条 / 每次滚 2 条），故意制造三件事：
+#   · 位移读数每次都偏 8px  —— 考 `_calibrate` 能不能把误差当屏吃掉
+#   · 某屏把 `人4` 读成 `人4x` —— 同一个位置的两份观测必须合成一条
+#   · 某屏少读一条           —— 那一屏缺的位置不能把别人挤歪
+# 断言：最终 12 条、顺序完全正确、每条 `_gy` 都落在真值 ±1 行内。
 import threading
 
 _ALL = [{"member": f"人{i}", "boss": "古铁", "damage": 1000 + i,
          "damage_raw": str(1000 + i), "pct": f"{i}%", "conf": 0.9} for i in range(12)]
 _PITCH = 100.0
+_STEP = 200.0                        # 每次滚 2 行
 
 
-class _FakeImg:
+class _Img:
     def __init__(self, screen):
         self.screen = screen
 
@@ -406,7 +407,7 @@ class _FakeImg:
         return self
 
 
-class _FakeLoc:
+class _Loc:
     cards = [1] * 6
     box = (0, 0, 600, 600)
 
@@ -414,17 +415,18 @@ class _FakeLoc:
         self.pitch = _PITCH
 
 
-class _Deep(CE):
-    """只带第二遍用得到的字段，UI 相关全部空实现。"""
+class _Scroll(CE):
+    """假宿主：只实现 capture 用到的那几个出口。"""
 
-    def __init__(self, rows):
+    def __init__(self):
         self._stop = threading.Event()
         self._roster = None
         self._bosses = []
         self.last_pitch = _PITCH
         self.screen = 0
         self.said = []
-        self._rows = rows
+        self.got = []
+        self._offset = 0.0
 
     def _crop(self, img):
         return img
@@ -433,132 +435,80 @@ class _Deep(CE):
         self.said.append(msg)
 
     def emit_rows(self, rows):
+        self.got = rows            # 抓最后一次快照（capture 传的是同一个 list）
+
+    def emit_done(self):
         pass
 
+    def _scroll_to_top(self, region, pitch):
+        return None                # 仿真里画面本来就在顶部
+
     def _drag_list(self, region, dist, up=False):
-        # 现实里它只表示"这次拖出得去手"，到底是由 `_measure` 的位移判断的
         self.screen += 1
         return True
 
     def _measure(self, region, a, b):
-        # 前三次故意偏 10px（考校准）；到第 4 屏之后拖不动了 → 位移 0
-        return (0, 0.9) if self.screen > 3 else (210, 0.9)
+        # 到底之后不动；之前每次故意偏 8px（真值 200）
+        return (0, 0.9) if self.screen * _STEP > 6 * _PITCH else (_STEP + 8, 0.9)
 
 
-def _fake_read(img, eng, roster=None, bosses=None):
+def _read(img, eng, roster=None, bosses=None):
     off = img.screen * 2
+    seg = _ALL[off:off + 6]
     out = []
-    for j, r in enumerate(_ALL[off:off + 6]):
+    for j, r in enumerate(seg):
         d = dict(r)
-        d["_y"] = 100 + j * 100
+        d["_y"] = int(100 + j * _PITCH)
+        # 第 2 屏把 `人4` 读成 `人4x`：同一个位置、同一个 BOSS、同一伤害
+        if img.screen == 2 and d["member"] == "人4":
+            d["member"] = "人4x"
+            d["conf"] = 0.55
+        # 第 3 屏少读一条（模拟边缘被裁）
+        if img.screen == 3 and d["member"] == "人7":
+            continue
         out.append(d)
-    return out, _FakeLoc()
+    return out, _Loc()
 
 
-_orig_deep = (A.grab, A.wait_settled, RH.read_hard)
+_orig = (A.grab, A.wait_settled, RH.read_hard)
 try:
-    # 第一遍漏了第 4、9 条（模拟边缘行被裁掉）
-    _first = []
-    for i in (0, 1, 2, 3, 5, 6, 7, 8, 10, 11):
-        d = dict(_ALL[i])
-        d["_y"] = 100
-        d["_gy"] = 100 + i * 100
-        _first.append(d)
-
-    _d = _Deep(_first)
-    # 假画面必须跟着宿主翻页：`_second_pass` 只在开头 grab 一次，之后每轮
-    # 都用 wait_settled 的返回值 —— 固定返回 screen=0 的话它永远在读第一屏。
-    A.grab = lambda region: _FakeImg(_d.screen)
-    A.wait_settled = lambda region, raw: (_FakeImg(_d.screen), 0.0, 0)
-    RH.read_hard = _fake_read
-
-    _screens = _d._second_pass((0, 0, 100, 100), None, _first)
-    _d._rows.sort(key=lambda r: int(r.get("_gy") or 1 << 30))
-    _order = [r["member"] for r in _d._rows]
-
-    check("第二遍把所有行都补齐", len(_d._rows) == 12, f"{len(_d._rows)} 条")
-    check("第二遍顺序完全正确", _order == [f"人{i}" for i in range(12)], str(_order))
-    check("扫过的屏数报得对", _screens == 4, str(_screens))
-    check("排版没被第二遍打乱（_gy 没整体偏移）",
-          all(abs(int(r["_gy"]) - (100 + int(r["member"][1:]) * 100)) <= _PITCH
-              for r in _d._rows),
-          str([(r["member"], r["_gy"]) for r in _d._rows[:4]]))
-    check("第二遍有新行时日志会报",
-          any("严格第二遍" in m for m in _d.said), str(_d.said[:3]))
+    _sc = _Scroll()
+    A.grab = lambda region: _Img(_sc.screen)
+    A.wait_settled = lambda region, raw: (_Img(_sc.screen), 0.0, 0)
+    RH.read_hard = _read
+    _sc.capture((0, 0, 100, 100))
 finally:
-    A.grab, A.wait_settled, RH.read_hard = _orig_deep
+    A.grab, A.wait_settled, RH.read_hard = _orig
 
-# ---------------- v1.55 残行归并 ----------------
-#
-# 实测 03:54 那轮：两轮采完仍留着 #34（无名无 BOSS）和 #36（空本，与 #35 空木
-# 同一刀、伤害差 0.86%）。这一组按真实数值复刻，并给每条规则各配一个反例。
-class _Rec(CE):
-    def __init__(self, names, pitch=86.0):
-        self._roster = {"names": {n: {} for n in names}} if names else None
-        self._bosses = []
-        self.last_pitch = pitch
+_rows = _sc.got
+_order = [r["member"] for r in _rows]
+check("滚动采集：条数正好 12（读歪的那条合成一条）", len(_rows) == 12, f"{len(_rows)} 条")
+check("滚动采集：顺序完全正确", _order == [f"人{i}" for i in range(12)], str(_order))
+check("滚动采集：每条位置落在真值 1 行内",
+      all(abs(int(r["_gy"]) - (100 + int(r["member"][1:]) * _PITCH)) <= _PITCH
+          for r in _rows),
+      str([(r["member"], r["_gy"]) for r in _rows[:4]]))
+check("读歪的那份观测被同一位置的好读数盖掉",
+      all((r.get("conf") or 0) >= 0.9 for r in _rows),
+      str([(r["member"], r["conf"]) for r in _rows if (r.get("conf") or 0) < 0.9]))
 
+# --- 校准本身：位移读数一直偏 8px，26 屏就攒出两行多，必须在每屏被吃掉
+_cal = _Scroll()
+_rows = []
+for _k in range(4):
+    _cal.screen = _k
+    _recs, _l = _read(_Img(_k), None)
+    if _rows:
+        _cal._offset, _n = _cal._calibrate(_cal._offset, _rows, _recs, _PITCH)
+    for _r in _recs:
+        _r["_gy"] = int(_cal._offset + int(_r["_y"]))
+    _cal._absorb_all(_rows, _recs, _PITCH)
+    _cal._offset += _STEP + 8
+check("校准把累计漂移吃掉了（4 屏偏 32px → 修回真值附近）",
+      all(abs(int(r["_gy"]) - (100 + int(r["member"][1:]) * _PITCH)) <= 20
+          for r in _rows),
+      str([(r["member"], r["_gy"]) for r in _rows[:5]]))
 
-_full = dict(member="空木", boss="邪魔", damage=11096802360,
-             damage_raw="11,096,802,360", pct="11.1%", conf=0.999)
-
-# 1) 有名残行：名字像 0.50 + 伤害差 0.86% → 并进完整行（03:54 的 #36 → #35）
-_rows = [dict(_full, _gy=1000),
-         dict(member="空本", boss="", damage=11000902260,
-              damage_raw="11 000 902 260", pct="", conf=0.692, _gy=1086)]
-_n, _d, _m = _Rec(["空木"])._reconcile_partial(_rows, 86.0)
-check("有名残行按名字+伤害归并", _n == 1 and _d == 0 and len(_rows) == 1, _m)
-check("归并后留下的是干净读数",
-      _rows[0]["member"] == "空木" and _rows[0]["boss"] == "邪魔", str(_rows[0]))
-check("归并记进 member_note", "并掉 1 条残读" in (_rows[0].get("member_note") or ""),
-      str(_rows[0].get("member_note")))
-
-# 2) 无名无 BOSS：有位置且对方满 3 刀 → 按位置归并（03:54 的 #34 → #35）
-_full3 = [dict(_full, _gy=1000), dict(_full, boss="铁匠", damage=9000000000,
-                                      damage_raw="9,000,000,000", pct="50.0%", _gy=1400),
-          dict(_full, boss="古铁", damage=8000000000,
-               damage_raw="8,000,000,000", pct="40.0%", _gy=1800)]
-_rows = [dict(r) for r in _full3] + [
-    dict(member="", boss="", damage=11000000000, damage_raw="11,000,000,000",
-         pct="", conf=0.859, _gy=1040)]
-_n, _d, _m = _Rec(["空木"])._reconcile_partial(_rows, 86.0)
-check("无名残行按位置归并（同位置）", _n == 1 and _d == 0 and len(_rows) == 3, _m)
-
-# 3) 无名无 BOSS 且位置离得远 → 丢弃并点名（无法归属）
-_rows = [dict(_full, _gy=1000)] + [
-    dict(member="", boss="", damage=11000000000, damage_raw="11,000,000,000",
-         pct="", conf=0.859, _gy=5000)]
-_n, _d, _m = _Rec(["空木"])._reconcile_partial(_rows, 86.0)
-check("无名残行归并不了就丢弃", _n == 0 and _d == 1 and len(_rows) == 1, _m)
-check("丢弃时把伤害和 conf 写出来", "11,000,000,000" in _m and "0.86" in _m, _m)
-
-# 4) 有名但伤害差太远 → 不动（留给复核，别硬并）
-_rows = [dict(_full, _gy=1000),
-         dict(member="空本", boss="", damage=5000000000,
-              damage_raw="5,000,000,000", pct="", conf=0.6, _gy=1000)]
-_n, _d, _m = _Rec(["空木"])._reconcile_partial(_rows, 86.0)
-check("伤害差太远就不并", _n == 0 and _d == 0 and len(_rows) == 2, _m)
-
-# 5) 完整行之间一律不动（哪怕伤害很像、名字很像）
-_rows = [dict(_full, _gy=1000), dict(_full, boss="铁匠", _gy=1086)]
-_n, _d, _m = _Rec(["空木"])._reconcile_partial(_rows, 86.0)
-check("完整行之间不合并", _n == 0 and _d == 0 and len(_rows) == 2, _m)
-
-# 6) 名字同样像的两个候选 → 不表态（第二候选 0.50，差距 0）
-_rows = [dict(_full, member="空木", _gy=1000),
-         dict(member="空水", boss="邪魔", damage=11100000000,
-              damage_raw="11,100,000,000", pct="10.0%", conf=0.9, _gy=2000),
-         dict(member="空本", boss="", damage=11000902260,
-              damage_raw="11 000 902 260", pct="", conf=0.692, _gy=3000)]
-_n, _d, _m = _Rec(["空木", "空水"])._reconcile_partial(_rows, 86.0)
-check("候选不分伯仲就不并", _n == 0 and len(_rows) == 3, _m)
-
-# 7) 残行的位置归并还要"那个人满 3 刀"这道闸
-_rows = [dict(_full, _gy=1000)] + [
-    dict(member="", boss="", damage=11000000000, damage_raw="11,000,000,000",
-         pct="", conf=0.859, _gy=1040)]
-_n, _d, _m = _Rec(["空木"])._reconcile_partial(_rows, 86.0)
-check("对方没满 3 刀就不按位置并（可能是真漏的那一刀）", _n == 0 and _d == 1, _m)
 
 print()
 if fail:

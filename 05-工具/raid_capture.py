@@ -22,7 +22,6 @@ import time
 from datetime import datetime
 
 import alliance_ocr as A
-import raid_core as rc
 
 
 class CaptureEngine:
@@ -116,36 +115,6 @@ class CaptureEngine:
         except Exception:
             pass
         return True
-
-    def _insert_in_order(self, rows, rec, recs, idx, base):
-        """把 rec 插回 rows 里它该在的位置（v1.45）。
-
-        优先找"屏幕上它下面那一行"在 rows 里的**实际位置**当锚点 —— 这是精确的。
-        v1.43 用的是 `base = len(rows) - len(last_rows)`，可那个基准假设"rows 尾部
-        正好是上一屏的 recs"，补回的行一插进来就不成立了，越补越偏
-        （实测实机第 3 条 `班长` 被插到工具第 1 条）。
-
-        锚点顺序：下方邻居 → 上方邻居 → 才退回 base+idx（整屏都是新行时没邻居可比）。
-        """
-        for nxt in recs[idx + 1:]:
-            pos = next((j for j, x in enumerate(rows) if self._same_rec(x, nxt)), None)
-            if pos is not None:
-                # 屏号/坐标跟着锚点走（v1.47）：回扫补进的行原本没有 `_pass`，
-                # 不继承的话最终排序会把它们全甩到 9999 那一档的末尾。
-                rec.setdefault("_pass", rows[pos].get("_pass", 9999))
-                rec["_y"] = int(rows[pos].get("_y") or 0) - 1      # 排在锚点前面
-                rec.setdefault("_gy", (int(rows[pos].get("_gy") or 0) or 1 << 29) - 1)
-                rows.insert(pos, rec)
-                return
-        for prv in reversed(recs[:idx]):
-            pos = next((j for j, x in enumerate(rows) if self._same_rec(x, prv)), None)
-            if pos is not None:
-                rec.setdefault("_pass", rows[pos].get("_pass", 9999))
-                rec["_y"] = int(rows[pos].get("_y") or 0) + 1      # 排在锚点后面
-                rec.setdefault("_gy", (int(rows[pos].get("_gy") or 0) or 1 << 29) + 1)
-                rows.insert(pos + 1, rec)
-                return
-        rows.insert(min(max(0, base + idx), len(rows)), rec)
 
     def _measure(self, region, a, b):
         """只在**框选区域**内量位移，且带方向。
@@ -409,144 +378,6 @@ class CaptureEngine:
             prev = cur
         self.say(f"回滚 16 次仍未确认到顶（已滚 {moved} 次），按当前位置继续", "WARN")
 
-    # ---------------- v1.54 严格采集：重开再扫 ----------------
-
-    def _reopen_record(self, region, eng):
-        """关掉记录弹窗 → 重新点开。返回 (ok, 说明)。
-
-        为什么关掉重开，而不是就地滚回顶部：反向扫那 50 多屏里 `本屏重叠 6/6`
-        说明它几乎什么都没做（补进 2 条花 3 分钟）；而重开后列表必然回顶，
-        第二遍和第一遍的累计位移都从 0 起算，`_gy` 天然同坐标系 —— 重叠区的
-        比对才有意义。
-
-        关弹窗用**点外面**（用户截图实测有效）：弹窗大约占 27%~64% 宽 × 20%~83% 高，
-        所以 (8%, 50%) / (92%, 50%) 一定在弹窗外。每点一次都用 `on_record_page`
-        复核列表是不是真没了；两次都没关掉，再补一发 ESC。
-        """
-        import raid_nav as rn
-        import raid_ocr as ro
-
-        x0, y0, x1, y1 = region
-        w, h = max(1, x1 - x0), max(1, y1 - y0)
-
-        def _gone() -> bool:
-            try:
-                _img = self._crop(A.grab(region))
-                return not rn.RaidNav.on_record_page(ro.tokens(_img, eng), _img)
-            except Exception:
-                A.log_exc("deep-close")
-                return False
-
-        _closed = False
-        for rx, ry in ((0.08, 0.50), (0.92, 0.50)):
-            if self._stop.is_set():
-                return False, "已取消"
-            A.click_at(int(x0 + w * rx), int(y0 + h * ry))
-            time.sleep(0.55)
-            if _gone():
-                _closed = True
-                break
-        if not _closed:
-            # 点空白没用 → ESC。可能连突袭页一起关掉，下面的 goto_record 会逐级补回来。
-            try:
-                A.tap_key(0x1B)
-            except Exception:
-                A.log_exc("deep-esc")
-            time.sleep(0.7)
-
-        hook = getattr(self, "reenter", None)
-        if hook is None:
-            return False, "没有导航能力（宿主没提供 reenter）"
-        try:
-            ok, msg = hook(region)
-        except Exception as e:
-            A.log_exc("deep-reenter")
-            return False, f"重开记录页出错：{e}"
-        if not ok:
-            return False, f"重开没成功（{msg}）"
-        # 弹窗没关掉时 goto_record 会直接回"已经在联盟记录页"（ok=True）——
-        # 那种情况下列表还停在底部，第二遍会从中间起扫，`_gy` 全偏。
-        # Engine 会把它记进 `_entered_by_nav`（只有真的重新点开才是 True）。
-        if not getattr(self, "_entered_by_nav", True):
-            return False, "记录页没关掉（还停在原页面）→ 无法从头再扫"
-        return True, f"已重开记录页（{msg}）"
-
-    def _second_pass(self, region, eng, rows):
-        """严格采集第二遍：从列表顶部再扫一遍，只增补不重建。
-
-        和正向那套的区别：
-          · 不动 rows 的既有内容，只把"没见过"的行插进来；
-          · 不建 last_rows、不做 patch —— 那是"连续两屏"的机制，这一遍独立成段，
-            去重全靠 `_contains` + `_dedupe`；
-          · `_gy` 用**重叠区反校**，落在第一遍的坐标系里（见下）。
-
-        返回扫过的屏数（日志用）。
-        """
-        from raid_hard import MAX_SCREENS, read_hard
-
-        _off2 = 0          # 这一遍自己的累计位移（从顶部起算）
-        _k = 0
-        raw = A.grab(region)
-        img = self._crop(raw)
-        for _k in range(MAX_SCREENS):
-            if self._stop.is_set():
-                break
-            recs, loc = read_hard(img, eng, self._roster, self._bosses)
-            if not loc.cards:
-                break
-            _pitch = loc.pitch or self.last_pitch or 0
-            # 反校：拿"已经在表里"的行比一遍，取中位数修正累计位移。两遍的拖动
-            # 次数不一定一样（正向有过"加大步长再试一次"），不校准的话第二遍
-            # 补进的行会整体偏移几行 —— 那正是"滑得越多越容易乱"的同一个病。
-            _deltas = []
-            for _r in recs:
-                _old = next((x for x in rows if self._same_rec(x, _r)), None)
-                if _old is not None and _old.get("_gy") is not None:
-                    _deltas.append(int(_old["_gy"]) - (_off2 + int(_r.get("_y") or 0)))
-            if _deltas:
-                _deltas.sort()
-                _off2 += _deltas[len(_deltas) // 2]
-            _new = 0
-            for _i, _r in enumerate(recs):
-                if self._contains(rows, _r):
-                    continue
-                # 第二遍新行排在 9000+，同一 `_gy` 时让第一遍的读数优先
-                _r.setdefault("_pass", 9000 + _k)
-                self._insert_in_order(rows, _r, recs, _i, len(rows))
-                # 插入没给 `_gy`（找不到锚点）时，用这一遍的物理位置兜底
-                _r.setdefault("_gy", _off2 + int(_r.get("_y") or 0))
-                _new += 1
-            if _new:
-                # **原地换内容**（v1.54）：`_dedupe` 返回的是新列表，如果只把
-                # 局部名字重绑过去，调用方（capture）手里还是旧对象 —— 它会拿
-                # 一份"没有这一屏新增"的列表继续跑，第二遍等于白扫。
-                rows[:] = self._dedupe(rows)[0]
-                self.emit_rows(rows)
-            # 表格跟着走（和回扫那套一致）
-            _sig = getattr(self, "scrollRow", None)
-            _pos = next((j for j, x in enumerate(rows)
-                         if any(self._same_rec(x, _r) for _r in recs)), None)
-            if _pos is not None and _sig is not None:
-                _sig.emit(_pos)
-            if _k % 5 == 0:
-                _hit = sum(1 for x in recs if self._contains(rows, x))
-                self.say(f"严格第二遍 {_k} 屏 · 累计 {len(rows)} 条 · "
-                         f"本屏重叠 {_hit}/{len(recs)}"
-                         + (f" · 新增 {_new} 条" if _new else ""))
-            if not self._drag_list(region, int(min(A.DRAG_MAX, max(
-                    A.MIN_DRAG_PX, _pitch * self.SCROLL_ROWS)))):
-                break
-            _prev = raw
-            raw, _s, _st = A.wait_settled(region, raw)
-            _sh, _co = self._measure(region, _prev, raw)
-            img = self._crop(raw)
-            if _sh is not None and _co >= 0.3:
-                _off2 += abs(int(_sh))
-            if _sh is not None and abs(_sh) < 5:
-                self.say(f"第二遍到底（位移 {_sh}px）· 共 {_k + 1} 屏")
-                break
-        return _k + 1
-
     # ---------------- v1.54 成员额度锚定 ----------------
 
     @classmethod
@@ -783,22 +614,139 @@ class CaptureEngine:
             msg += " —— 改不动的请人工核（复核列会点名）"
         return len(fixed), msg
 
-    def capture(self, region, from_nav: bool = False):
-        """滚采整页。`from_nav=True` = 记录页是刚刚由导航点开的，跳过回顶。
+    # ---------------- v1.56 观测归并：物理位置是记录的唯一身份 ----------------
 
-        为什么：刚点开的页面本来就在第一行，再拖一次既浪费时间（最多 16 次回滚），
-        又会刷出「画面一直没动（位移 0px）—— 已在顶部，或拖动被权限拦住」这条
-        误导性 WARN；而用户自己翻到中间再点开始时，**必须**回顶，否则漏采上面的记录。
+    @staticmethod
+    def _compatible(a, b) -> bool:
+        """两份观测能不能是同一条记录。
+
+        位置相同一般是同一条，但**校准万一偏了一行**，相邻两条记录会被判成
+        同一条 —— 那就是永久丢数据。所以再加一道"内容对得上"的门：
+        同 BOSS / 同剩余血量 / 伤害差 20% 内 / 名字相似 0.5 —— 任一条成立。
+        一条都不成立就当成两条（宁可多一条看得见的坏行，也不能少一条）。
+        """
+        ba, bb = (a.get("boss") or ""), (b.get("boss") or "")
+        if ba and ba == bb:
+            return True
+        pa, pb = (a.get("pct") or ""), (b.get("pct") or "")
+        if pa and pa == pb:
+            return True
+        ad, bd = a.get("damage"), b.get("damage")
+        if ad and bd and abs(ad - bd) <= max(abs(ad), abs(bd)) * 0.2:
+            return True
+        ma, mb = (a.get("member") or ""), (b.get("member") or "")
+        if ma and mb and CaptureEngine._name_sim(ma, mb) >= 0.5:
+            return True
+        return False
+
+    @staticmethod
+    def _merge_obs(old, new) -> None:
+        """同一位置的两份观测合成一份：缺的补上，分高的读数胜出。"""
+        for k in ("member", "boss", "pct"):
+            if not (old.get(k) or "") and (new.get(k) or ""):
+                old[k] = new[k]
+        if not (old.get("member_note") or "") and (new.get("member_note") or ""):
+            old["member_note"] = new["member_note"]
+        if not (old.get("boss_note") or "") and (new.get("boss_note") or ""):
+            old["boss_note"] = new["boss_note"]
+        nd, od = new.get("damage"), old.get("damage")
+        if od is None and nd is not None:
+            old["damage"], old["damage_raw"] = nd, new.get("damage_raw") or ""
+        elif (nd is not None and od is not None and nd != od
+              and (new.get("conf") or 0) > (old.get("conf") or 0)):
+            # 伤害不等却同位置：谁的分高信谁的（低分那份就是读歪的那次）
+            old["damage"], old["damage_raw"] = nd, new.get("damage_raw") or ""
+        if (new.get("conf") or 0) > (old.get("conf") or 0):
+            old["conf"] = new["conf"]
+
+    def _absorb(self, rows, rec, pitch) -> str:
+        """把一份新观测并进 rows（按 `_gy` 定位）。返回 'new' / 'upd'。
+
+        `rows` 永远按 `_gy` 升序 —— 顺序就是实机顺序，不依赖任何"插到第几个"。
+        """
+        gy = rec.get("_gy")
+        if gy is None:
+            rows.append(rec)
+            return "new"
+        gy = int(gy)
+        lo, hi = 0, len(rows)
+        while lo < hi:                      # 二分找插入点
+            mid = (lo + hi) // 2
+            if int(rows[mid].get("_gy") or 0) < gy:
+                lo = mid + 1
+            else:
+                hi = mid
+        for j in (lo - 1, lo):              # 只看左右两个邻居
+            if not (0 <= j < len(rows)):
+                continue
+            old = rows[j]
+            if abs(int(old.get("_gy") or 0) - gy) <= pitch * 0.45 and self._compatible(old, rec):
+                self._merge_obs(old, rec)
+                return "upd"
+        rows.insert(lo, rec)
+        return "new"
+
+    def _absorb_all(self, rows, recs, pitch):
+        """整屏观测并进 rows。返回 (新增几条, 更新几条)。"""
+        add = upd = 0
+        for r in recs:
+            if self._absorb(rows, r, pitch) == "new":
+                add += 1
+            else:
+                upd += 1
+        return add, upd
+
+    def _calibrate(self, offset, rows, recs, pitch):
+        """用重叠区反校累计位移，把 `_gy` 拉回**同一个坐标系**。返回 (offset, 用了几条)。
+
+        这是 v1.56 最关键的一步。`_offset` 是一屏一屏累加测量位移得来的，
+        每次都有 ±px 噪声，26 屏能攒出小半行 —— 于是同一行在不同屏拿到不同的
+        `_gy`，最终排序就错位。这里每屏都拿"已经认识的行"反算一次中位数偏差，
+        把误差在当屏吃掉，不让它累积。
+        """
+        deltas = []
+        for r in recs:
+            y = r.get("_y")
+            if y is None:
+                continue
+            guess = offset + int(y)
+            near, best = None, None
+            for x in rows:
+                gx = x.get("_gy")
+                if gx is None:
+                    continue
+                d = abs(int(gx) - guess)
+                if best is None or d < best:
+                    near, best = x, d
+            if near is None or best > pitch * 0.8:
+                continue
+            if not self._compatible(near, r):
+                continue
+            deltas.append(int(near["_gy"]) - guess)
+        if len(deltas) < 2:
+            return offset, len(deltas)
+        deltas.sort()
+        return offset + deltas[len(deltas) // 2], len(deltas)
+
+    def capture(self, region, from_nav: bool = False):
+        """滚采整页。`from_nav=True` = 记录页是刚刚由导航点开的。
+
+        v1.56 起核心只有一条规则：**物理位置是记录的唯一身份**。
+        OCR 读到的每一行都不是"一条新记录"，而是"某个位置上的一份观测"——
+        同一行在相邻 3 屏里各被读一次，那就是同一条记录的 3 份观测。
+
+        于是三样东西一起消失：
+          · `patch`（按下标改行）—— 新观测直接更新那个位置的那条
+          · 补回（按锚点插行）—— 位置就是 `_gy`，插到该去的地方
+          · 靠伤害数字判等 —— 位置相同就是同一条
+
+        `rows` 永远按 `_gy` 有序，所以顺序不再依赖任何"插到第几个"的推算。
         """
         from raid_hard import MAX_SCREENS, read_hard    # 不含 UI，打包时不会拖进 tkinter
         try:
             eng = A.get_engine()
             rows = None
-            last_rows = None
-            box = None
             pitch = 0.0
-            last = None
-            miss = back = 0
             raw = A.grab(region)
             img = self._crop(raw)
             # 先认一帧拿到行距，再把列表拉回第一行（只往下滚，从中间起采会漏上面）
@@ -822,178 +770,89 @@ class CaptureEngine:
                     img = self._crop(raw)
             except Exception:
                 A.log_exc("hard-top")
-            # v1.52：从列表顶部起累计滚过的像素。每条记录的全局位置 = 这个 + 屏内 y，
-            # 排序只认物理坐标，不再依赖"第几屏第一次看到"（那个会因漏行而偏）。
-            _offset = 0
-            for i in range(MAX_SCREENS):
+
+            _offset = 0.0        # 从列表顶部起累计滚过的像素
+            _shift_px = 0        # 上一屏→这一屏的位移（日志用）
+            _still = 0
+            _k = -1
+            for _k in range(MAX_SCREENS):
                 if self._stop.is_set():
                     break
                 recs, loc = read_hard(img, eng, self._roster, self._bosses)
-                # v1.52：全局物理位置 = 从顶部起累计滚动量 + 屏内纵坐标。
-                # 这一行滚到哪一屏，这个值都不变 —— 所以排序不会被"第几屏才看到"带偏。
-                for _r in recs:
-                    _r["_gy"] = _offset + int(_r.get("_y") or 0)
                 if not loc.cards:
-                    self.say("这一屏没认到记录，收工")
+                    self.say("这一屏没认到记录，收工" if rows is None else "这一屏没有卡片 → 到底")
                     break
-                # v1.37：边缘残行被 read_hard 丢了（partial / clipped 缺 BOSS）。
-                # 丢了多少必须留痕 —— 丢多了就是"明明 96 刀只采到 93 条"。
+                pitch = loc.pitch or pitch or 86.0
+                self.last_pitch = pitch
                 _drop = len(loc.cards) - len(recs)
                 if _drop > 0:
                     self._edge_dropped = getattr(self, "_edge_dropped", 0) + _drop
                     A.log("hard", f"边缘残行丢弃 {_drop} 条"
                                   f"（这屏 {len(loc.cards)} 张卡 → {len(recs)} 条）")
+                # ---- 打位置：先校准累计位移（把误差当屏吃掉），再算 `_gy`
+                if rows:
+                    _offset, _ncal = self._calibrate(_offset, rows, recs, pitch)
+                for _r in recs:
+                    _r["_gy"] = int(_offset + int(_r.get("_y") or 0))
                 if rows is None:
-                    rows, last_rows, box, pitch = recs, recs, loc.box, loc.pitch
-                    # v1.48：首屏这 6 条**必须也打屏号**。之前漏了这一步，
-                    # 它们在最终 sort 里全是默认的 9999，被后面每一屏的记录挤到末尾 ——
-                    # 实测 02:32 那轮实机第 1 条 `大魔王·重装火神R` 直接排没了。
-                    for _r in rows:
-                        _r.setdefault("_pass", i)
-                    self.last_pitch = pitch
-                    # 带上名字：首屏丢了哪一条、读成什么，只有这里能看出来
+                    rows = []
+                    self._absorb_all(rows, recs, pitch)
                     self.say(f"首屏 {len(recs)} 条 · 行距 {pitch:.0f}px · "
                              + "、".join((r.get("member") or "?") for r in recs[:6]))
                 else:
-                    shift, corr = None, 0.0
-                    if last is not None and box:
-                        x0, y0, x1, y1 = box
-                        # 带方向：splice 只吃"内容上移"的正位移，反向滚时不能骗它
-                        shift, corr = A.measure_vshift_signed(last.crop((x0, y0, x1, y1)),
-                                                             img.crop((x0, y0, x1, y1)))
-                    shift_px = shift
-                    if corr < 0.3:
-                        shift = None
-                    added, info = rc.splice(last_rows, recs, shift, pitch)
-                    for _r in added:
-                        _r.setdefault("_pass", i)
-                    self.last_splice = dict(info, measured_px=shift_px)
-                    if info.get("same"):
-                        miss += 1
-                        if miss == 1 and box:
-                            self.say(f"拖动没挪动（实测位移 {shift_px}px · 相关 {corr:.2f}）"
-                                     f"→ 加大步长再试一次", "WARN")
-                            self._drag_list(region, int(min(A.DRAG_MAX, max(
-                                A.MIN_DRAG_PX, pitch * self.SCROLL_ROWS * 2))))
-                            last = img
-                            raw, _s, _st = A.wait_settled(region, raw)
-                            img = self._crop(raw)
-                            continue
-                        self.say(f"列表到底了：拖动不再产生位移"
-                                 f"（本次 {shift_px}px · 相关 {corr:.2f}）", "WARN")
-                        try:
-                            self._fill_bottom(rows, recs + self._extra_read(region, eng))
-                            self.emit_rows(rows)
-                        except Exception:
-                            A.log_exc("hard-fill-bottom")
-                        break
-                    if added is None:
-                        back += 1
-                        if self._all_known(recs, rows):
-                            # 拼不上不是缺行，是列表到底后回弹了一格：这一屏的内容我们全有。
-                            # 必须走到底后的回填，否则最后一条的 BOSS 永远空着
-                            # （10:05 那轮凛酱的「铁匠」就是这么丢的）。
-                            self.say("这一屏的记录已全部采过 → 确认到底", "INFO")
-                            try:
-                                self._fill_bottom(rows, recs + self._extra_read(region, eng))
-                                self.emit_rows(rows)
-                            except Exception:
-                                A.log_exc("hard-fill-bottom")
-                            break
-                        if back == 1 and last is not None:
-                            # 只在真的拼不上时留两屏原图：下次不用靠猜是位移算错还是 OCR 读歪。
-                            try:
-                                d = A.OUT_DIR / f"诊断_拼接_{datetime.now():%Y%m%d_%H%M%S}"
-                                d.mkdir(parents=True, exist_ok=True)
-                                last.save(d / "上一屏.png")      # last 已经是框内图，别再裁一次
-                                img.save(d / "这一屏.png")
-                                self.say(f"拼接对不上（{info.get('why')}）→ 已存两屏供排查"
-                                         f" → {d.name}，往回小步补采", "WARN")
-                            except Exception:
-                                self.say(f"拼接对不上（{info.get('why')}）→ 往回小步补采", "WARN")
-                        if back <= 1 and box:
-                            self._drag_list(region, int(max(A.MIN_DRAG_PX, pitch * 0.9)), up=True)
-                            last = img
-                            raw, _s, _st = A.wait_settled(region, raw)
-                            img = self._crop(raw)
-                            continue
-                        self.say("补采后仍对不上，收工（可能缺行）", "WARN")
-                        break
-                    miss = back = 0
-                    if info.get("patch"):
-                        # 上一屏如果发生过合并，len(rows) 会比 len(last_rows) 还小，
-                        # 这条减法就地变负数，`0 <= base+idx` 全不成立 —— patch 一条都
-                        # 打不上（v1.48）。取非负，并在日志里报出来便于核对。
-                        base = max(0, len(rows) - len(last_rows))
-                        for idx, rec in info["patch"]:
-                            if 0 <= base + idx < len(rows):
-                                rows[base + idx] = rec
-                    rows, merged = self._dedupe(rows + added)
-                    if merged:
-                        _d = "；".join(
-                            f"{a_.get('member') or '?'}·{a_.get('boss') or '?'} "
-                            f"{a_.get('damage_raw') or a_.get('damage')} ← "
-                            f"{b_.get('damage_raw') or b_.get('damage') or '缺伤害'}"
-                            for a_, b_ in CaptureEngine.last_merges[:3])
-                        self.say(f"合并 {merged} 条重复：{_d}")
-                    # **兜底不变量：这一屏看见的每一条，都必须已经在列表里。**
-                    # 位移判偏时 m 会算大，边界行会被整条跳过（实测 12:47 那轮
-                    # 24 条里完全没有 `小卡卡`，可它就在留存帧的第一行）。
-                    # 漏的直接补进来，重复由 _dedupe 收掉 —— 宁可多一次比对，
-                    # 不能让屏幕上明明出现过的记录丢掉。
-                    lost = [r for r in recs
-                            if r.get("member") and r.get("damage") is not None
-                            and not self._contains(rows, r)]
-                    if lost:
-                        # 按这一屏里的原始下标插回去，**不能 append**：追加会让本该在
-                        # 第 3 条位置的行跑到列表末尾，和实机的顺序对不上（v1.43）。
-                        # 基准沿用 patch 那套 `base = len(rows) - len(last_rows)`。
-                        base = len(rows) - len(last_rows)
-                        for r in lost:
-                            idx = next((i for i, x in enumerate(recs) if x is r), 0)
-                            self._insert_in_order(rows, r, recs, idx, base)
-                        rows, _m2 = self._dedupe(rows)
-                        self.say(f"补回 {len(lost)} 条被位移跳过的行（已插回原位）")
-                    last_rows = recs
-                    fixed = len(info.get("patch") or [])
-                    if shift:
-                        _offset += abs(int(shift))       # v1.52 累计滚过的像素
-                    self.say(f"拼接 +{info.get('added', 0)} 条（位移 {info.get('shift_rows')} 行，"
-                             f"重叠 {info.get('hit')}/{info.get('overlap')}"
-                             + (f" · 修正 {fixed} 条边缘读数" if fixed else "") + "）")
+                    _add, _upd = self._absorb_all(rows, recs, pitch)
+                    self.last_splice = {"added": _add, "hit": len(recs) - _add,
+                                        "overlap": len(recs), "patch": [],
+                                        "shift_rows": round(_shift_px / pitch) if pitch else 0}
+                    self.say(f"拼接 +{_add} 条（位移 {round(_shift_px / pitch) if pitch else 0} 行，"
+                             f"重叠 {len(recs) - _add}/{len(recs)}"
+                             + (f" · 更新 {_upd} 条读数" if _upd else "") + "）")
                 self.emit_rows(rows)
 
                 if self._stop.is_set():
                     break
+                # ---- 滚一屏，量位移
                 dist = int(min(A.DRAG_MAX, max(A.MIN_DRAG_PX, pitch * self.SCROLL_ROWS)))
-                self._drag_list(region, dist)
-                last = img
+                if not self._drag_list(region, dist):
+                    self.say("拖动出不了手（框太小）→ 收工", "WARN")
+                    break
+                _prev = raw
                 raw, _s, _st = A.wait_settled(region, raw)
                 img = self._crop(raw)
-            # ---- v1.54 严格采集：重开记录页，从头再扫一遍 ----
-            #
-            # v1.40~1.53 是"从底部反向扫一遍"。实测那 50 多屏里 `本屏重叠 6/6`
-            # 说明它几乎什么都没做（补进 2 条，花 3 分钟）—— 反向时累计位移的
-            # 坐标系和正向不一致，插入只能靠锚点，锚点一错就错一串。
-            # 改成"关弹窗 → 重开 → 从上往下"：两遍都从顶部起算，`_gy` 同坐标。
-            if getattr(self, "deep", False) and rows and not self._stop.is_set():
-                _before_all = len(rows)
-                _ok_re, _how_re = self._reopen_record(region, eng)
-                self.say(f"严格采集：{_how_re}", "INFO" if _ok_re else "WARN")
-                if not _ok_re:
-                    # 重开失败就退回"拉回顶部"：功能等价，只是少了重新加载。
-                    try:
-                        self._scroll_to_top(region, pitch)
-                    except Exception:
-                        A.log_exc("deep-top")
-                _p2 = self._second_pass(region, eng, rows)
-                _added = len(rows) - _before_all
-                if _added:
-                    self.say(f"严格采集完成：第二遍 {_p2} 屏 · 补进 {_added} 条 "
-                             f"→ 正向确实漏了，结算前建议都开着")
+                _sh, _co = self._measure(region, _prev, raw)
+                if _sh is not None and _co >= 0.3:
+                    _offset += abs(int(_sh))
+                    _shift_px = abs(int(_sh))
                 else:
-                    self.say(f"严格采集完成：第二遍 {_p2} 屏 · 一条没补 "
-                             f"→ 正向已采全，这次严格模式白跑一趟")
+                    # 量不出来就按"这次打算滚多少"推进。否则后面每一屏都会落在
+                    # 同一个位置上，整页挤成一团 —— 比多滚一点糟得多。
+                    _offset += pitch * self.SCROLL_ROWS
+                    _shift_px = int(pitch * self.SCROLL_ROWS)
+                if _sh is not None and abs(_sh) < 5:
+                    _still += 1
+                    if _still == 1:
+                        self.say(f"拖动没挪动（实测位移 {_sh}px · 相关 {_co:.2f}）"
+                                 f"→ 加大步长再试一次", "WARN")
+                        if not self._drag_list(region, int(min(A.DRAG_MAX, max(
+                                A.MIN_DRAG_PX, pitch * self.SCROLL_ROWS * 2)))):
+                            break
+                        _p2 = raw
+                        raw, _s, _st = A.wait_settled(region, raw)
+                        img = self._crop(raw)
+                        _sh2, _co2 = self._measure(region, _p2, raw)
+                        if _sh2 is not None and _co2 >= 0.3:
+                            _offset += abs(int(_sh2))
+                            _shift_px = abs(int(_sh2))
+                        if _sh2 is not None and abs(_sh2) >= 5:
+                            continue
+                    self.say("列表到底了：拖动不再产生位移", "WARN")
+                    try:
+                        self._fill_bottom(rows, recs + self._extra_read(region, eng))
+                        self.emit_rows(rows)
+                    except Exception:
+                        A.log_exc("hard-fill-bottom")
+                    break
+                _still = 0
             # v1.54：成员额度锚定放在最终排序**之前** —— 归位后可能撞成同一条，
             # 还能被下面那次去重收掉；报告也要早于"超过 3 条"，否则用户看到
             # 某人 4 条会先怀疑是重复采集。

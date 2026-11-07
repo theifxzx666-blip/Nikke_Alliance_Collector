@@ -252,7 +252,6 @@ class Shell(QWidget):
         self._shortcuts()
 
         self.engine = Engine()
-        self.engine.deep = bool(self.cfg.get("deep_scan", False))   # v1.40 严格采集
         self.engine.rect_rel = self._load_rect()
         self.engine.logged.connect(self.say)
         self.engine.rowsChanged.connect(self._on_rows)
@@ -686,16 +685,6 @@ class Shell(QWidget):
         left.addWidget(self.card_title)
         left.addWidget(self.card_sub)
         card.body.addLayout(left, 1)
-
-        # v1.40 严格采集：紧挨着主按钮，采集前一眼看到、一次点击就切。
-        # 设置页里不放第二个 —— 同一个值两处开关最容易不同步。
-        self.chk_deep = QCheckBox("严格")
-        self.chk_deep.setToolTip("从底部往回再扫一遍（时间约翻倍）\n"
-                                 "结算前最后核对时打开：边缘行在反方向会完整露一次，\n"
-                                 "漏采和误读基本归零")
-        self.chk_deep.setChecked(bool(self.cfg.get("deep_scan", False)))
-        self.chk_deep.toggled.connect(self._on_deep_toggled)
-        card.body.addWidget(self.chk_deep, 0, Qt.AlignVCenter)
 
         self.btn_primary = QPushButton(f"开始采集  {self._k('hard')}")
         self.btn_primary.setObjectName("primary")
@@ -2426,13 +2415,6 @@ class Shell(QWidget):
         S.save_settings(pin=bool(v))
         if bool(v) != self._pin:
             self.toggle_pin()
-
-    def _on_deep_toggled(self, v):
-        """严格采集开关：落到配置 + 立刻同步给引擎（采集中也能切，下一轮生效）。"""
-        self.cfg["deep_scan"] = bool(v)
-        S.save_settings(deep_scan=bool(v))
-        if getattr(self, "engine", None) is not None:
-            self.engine.deep = bool(v)
 
     def _on_follow_toggled(self, v):
         self.cfg["follow"] = bool(v)
