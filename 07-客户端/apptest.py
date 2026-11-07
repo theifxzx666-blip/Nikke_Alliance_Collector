@@ -983,6 +983,28 @@ def main():
                {"member": "乙", "boss": "邪魔", "damage": 900, "pct": "9.0%"}],
               _B, None)[0]), "")
 
+    # ---------------- 5w. v1.29：库归位补繁简，复核给"最像谁"
+    # 真机：`蕭白` 在库里是 `萧白`（同一个人两种写法），被当成不在库；
+    # `UCOLVED` 是 `HGOLIVER` 被列宽截断 + 读错位，规则归不了位。
+    import zh as _ZH
+    check("繁简归一：蕭→萧", _ZH.to_simple("蕭白") == "萧白", _ZH.to_simple("蕭白"))
+    check("繁简归一：不把两个不同的短名混成一个", not _ZH.same_word("大白", "萧白"), "")
+    check("库归位：繁体读法归到简体库名",
+          SH.A.roster_fix("蕭白", {"萧白"}, None) == ("萧白", "萧白"),
+          str(SH.A.roster_fix("蕭白", {"萧白"}, None)))
+    check("库归位：短名仍不做模糊归档（`大白` 不该被并进 `萧白`）",
+          SH.A.roster_fix("大白", {"萧白"}, None)[0] == "大白",
+          str(SH.A.roster_fix("大白", {"萧白"}, None)))
+    _f7, _ = _RV.review([{"member": "UCOLVED", "boss": "邪魔", "damage": 5, "pct": "9.0%"}],
+                        _B, {"names": {"HGOLIVER": {}, "萧白": {}}})
+    _msg = next((f["msg"] for f in _f7 if f["code"] == "成员不在库"), "")
+    check("复核：给出最像的库内名字（UCOLVED → HGOLIVER 53%）",
+          "HGOLIVER" in _msg and "53%" in _msg, _msg)
+    _f8, _ = _RV.review([{"member": "老王", "boss": "邪魔", "damage": 5, "pct": "9.0%"}],
+                        _B, {"names": {"大魔王": {}, "萧白": {}}})
+    _msg8 = next((f["msg"] for f in _f8 if f["code"] == "成员不在库"), "")
+    check("复核：相似度太低就不瞎猜", "最像" not in _msg8, _msg8)
+
     # 键名不再写死 F2
     check("提示文案取当前键位（F7）", KEYS.current("attach") == "F7",
           KEYS.current("attach"))

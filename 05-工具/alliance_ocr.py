@@ -54,6 +54,7 @@ from tkinter import ttk, messagebox, filedialog
 from PIL import Image, ImageTk
 
 import appdir
+import zh
 
 def _app_dir() -> Path:
     """程序数据目录（`预设/`、`输出/`、日志都挂在这里）。
@@ -1805,6 +1806,13 @@ def roster_cand(text: str, names, alias=None, floor: float | None = None) -> tup
         return alias[text], 1.0
     if text in names:
         return text, 1.0
+    # 繁简 / 常见异体：`蕭白` 和库里的 `萧白` 是同一个人，不是两个。
+    # 两字名不做**模糊**归档（见下），但繁简不是模糊 —— 归一后完全相同就是命中，
+    # 和字面命中同一级别的证据。仍然要求候选唯一：库里真有 `萧白` 和 `蕭白`
+    # 两个条目时不表态。
+    hit = [n for n in list(names) if zh.same_word(n, text)]
+    if len(hit) == 1 and hit[0] != text:
+        return hit[0], 0.95
     # 两字名不做模糊归档：`空本`/`空木` 是同一行读歪，`大白`/`萧白` 却是两个
     # 真人，相似度都正好 0.5，光凭字面分不开。两字名的误读交给位置合并。
     if len(text) < ROSTER_MIN_LEN:

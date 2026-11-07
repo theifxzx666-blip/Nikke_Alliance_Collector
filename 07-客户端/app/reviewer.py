@@ -47,6 +47,18 @@ def _num(v):
         return None
 
 
+def _nearest(text, names):
+    """库里最像这个名字的一条 + 相似度。只用于给提示，不参与任何判定。"""
+    import difflib
+
+    best, score = "", 0.0
+    for n in names:
+        r = difflib.SequenceMatcher(None, text, n).ratio()
+        if r > score:
+            best, score = n, r
+    return best, score
+
+
 def review(rows, bosses=None, roster=None) -> tuple:
     """整表复核。返回 `(findings, summary)`。
 
@@ -161,7 +173,15 @@ def review(rows, bosses=None, roster=None) -> tuple:
         if not m:
             continue
         if names and m not in names:
-            add(i, "成员不在库", f"「{m}」不在当前成员库里（新盟员或读歪）")
+            # 给一个"最像谁"的建议值 —— 用户要的是能立刻判断，而不是自己一格格比。
+            # `UCOLVED` → 最像 `HGOLIVER`（53%）：昵称被游戏列宽截断 + OCR 错位，
+            # 这种光靠字符串规则归不了位（长度不等、相似度过不了阈值），
+            # 但人一眼就能认。所以**只建议，不改数据**。
+            near, sc = _nearest(m, names)
+            # 0.5 是底线：再低就是"库里有几十个人，随便挑一个也不止 40%"，
+            # 提示反而误导（实测 3 字名「老王」会给出 40% 的「大魔王」）。
+            hint = f"，最像「{near}」（{sc:.0%}）" if near and sc >= 0.5 else ""
+            add(i, "成员不在库", f"「{m}」不在库里{hint}（新盟员或读歪）")
         # 超 3 刀只在第一次见到这个人时报一次，否则同一句会刷 4 行
         if cnt[m] > 3 and m not in over_reported:
             over_reported.add(m)
