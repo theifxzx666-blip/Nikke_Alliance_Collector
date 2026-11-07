@@ -4,17 +4,21 @@
 > 本文件只回答三件事：**现在是什么样、为什么是这样、下次别踩什么**。
 > 逐日全过程日志已归档：`agent-归档-20261107.md`（1811 行，2026-10-27 ~ 11-07）。
 
-最后整理：2026-11-07 20:10
+最后整理：2026-11-07 21:05
 
 ---
 
 ## 0. 一句话现状
 
-**正式客户端 v1.22 Beta 已发布**：`07-客户端/`（PySide6），把原先三个 Tk 客户端合并为一个
+**正式客户端 v1.25 Beta**：`07-客户端/`（PySide6），把原先三个 Tk 客户端合并为一个
 程序（名单 + HARD 伤害），采集判据仍在 `05-工具/`，客户端通过 `RosterMixin` 直接持有。
 
 - 发行仓：<https://github.com/theifxzx666-blip/Nikke_Alliance_Collector>
-- 产物：`07-客户端/dist/NIKKE联盟采集/`（312 MB，内嵌 requireAdministrator 清单）
+- 产物：`07-客户端/dist/NIKKE联盟采集.exe` —— **单文件 136 MB**，发出去只发这一个；
+  内嵌 requireAdministrator 清单，启动解压约 8~9 s
+- 目录版：`python build.py --onedir` → `dist/NIKKE联盟采集/`（调试用，约 2 s 启动）
+- **运行数据**：`%APPDATA%\OrangeHelper\`（预设 / 库 / 配置 / 许可），exe 旁边零残留；
+  exe 旁已有 `预设\` 时自动走便携模式。导出的 CSV 仍在 `文档\嗷润吉联盟采集`
 - 已退役：设置里的「打开旧名单窗口」入口（v1.20 撤）；`hard_client` / `raid_window` 仅作
   判据参考与测试宿主保留，不再随发行包分发。
 
@@ -23,6 +27,23 @@
 | 名单采集 | `alliance_ocr.RosterMixin` + `app/roster_engine.py` | 🟢 生产可用 |
 | 困难伤害 | `raid_capture` / `raid_hard` / `raid_nav` + `app/engine.py` | 🟢 生产可用 |
 | 普通伤害（旧） | `raid_window.py` + `hard_client.py` | ⚪ 归档，不进发行包 |
+
+### 0.1 v1.23 → v1.25 变更一览（发布前收尾这一轮）
+
+| # | 改动 | 一句话原因 |
+|---|---|---|
+| 1 | 启动即写环境快照 + 装崩溃钩子 | 打包后 `sys.stdout` 是 `None`，崩了日志一个字都没有 |
+| 2 | 新增 `app/diag.py` 诊断包 | 光有日志不够，还得知道"他那台机器长什么样" |
+| 3 | 日志/配置脱敏（用户名、机器名、IP、MAC） | 用户要发日志，不能夹带能定位到人的东西 |
+| 4 | 单文件打包（136 MB，启动 8~9 s） | 发出去只发一个 exe |
+| 5 | `_seed_presets()` 递归 + 客户端首次调用 | 单文件版会丢掉 26 套内置 BOSS 库 |
+| 6 | `RosterEngine._apply_builtin_preset()` | 内置预设从 v1.0 起就没被读过，用户被反复要求标定 |
+| 7 | `T.dark_palette()` + viewport 透明 | Win10 浅色主题下设置页整片白屏 |
+| 8 | Esc 在导航阶段也生效 + 取消标志 | 按 Esc 反而把采集"启动"了 |
+| 9 | 主按钮停止判定改 `_continuous or _nav_running` | `_busy` 是旧工具旗标，headless 下永远是 False |
+| 10 | 热键按前台窗口动态注册 | `RegisterHotKey` 独占，在浏览器里按 F3 也会触发采集 |
+| 11 | 运行数据搬进 `%APPDATA%\OrangeHelper` | 不能在 exe 所在文件夹里释放文件 |
+| 12 | `build.py` 自检加硬 | exe 旁多一个文件、预设少于 32 个都拒绝出包 |
 
 ---
 
@@ -799,7 +820,120 @@ pathtest / wintest 全绿；`--shot` 0 异常；打包 311 MB。
 
 ---
 
-## 项目全史（v1.0 → v1.22）
+### 2026-11-07 20:30 v1.23：日志可导出 / 单文件发行
+
+1. **客户端此前不写环境快照也不装崩溃钩子** —— 只有界面文案经 `A.logline()` 落盘。
+   打包后 `sys.stdout` 是 `None`，`print` 直接抛异常、静默退出，日志里一个字都没有。
+   `main._boot_log()` 在建窗口前做三件事：`_fix_streams()`（把 stdout/stderr 接到日志）、
+   `install_crash_hooks()`（`sys` + `threading` 双钩子）、`log_start(extra)`（环境快照）。
+2. `log_start` 加 `extra` 参数并容错 `tk.TkVersion` —— 裁掉 tkinter 的包里也得能写日志。
+3. **诊断包** `app/diag.py`：环境 / 日志 / 配置 / 说明 四件套打 zip，落 `<数据根>/诊断/`。
+   入口：设置「日志与诊断 → 导出诊断包」+ `python -m app --diag`（界面起不来时兜底）。
+   采集边界写死在模块 docstring：**采**系统/屏幕/CPU/内存/运行库/权限/数据目录可写性；
+   **不采**用户名、计算机名、IP、MAC、序列号、账号；**不带**截图与名单 CSV。
+4. **脱敏 `mask()`**：`Path.home()` → `<用户目录>`、`users\<name>` → `<用户>`、
+   `COMPUTERNAME` → `<计算机>`、四段点分十进制 → `<IP>`、`xx:xx:mm:…` → `<MAC>`。
+   ⚠ 不做裸词替换：用户名短（`App`）会把正常单词吃掉。
+5. **单文件打包**：spec 受版本控制（原由 PyInstaller 生成、绝对路径写死），
+   `NIKKE_ONEFILE` 环境变量切形态。裁剪从"打完再删"改成 `Analysis` 清单过滤
+   （单文件形态外面没东西可删）。
+6. **`_seed_presets()` 递归化**：原来只拷顶层 `*.json`，`成员库/`、`BOSS库/` 永远搬不出
+   `_MEIPASS` —— 单文件版会丢掉 26 套内置 BOSS 名单。改 `rglob`，仍只播缺失不覆盖。
+7. `NOTICE.txt` 进包并随首次运行播到 exe 旁边（单文件版否则没地方放许可声明）。
+8. `verify_onefile()` 在**空临时目录**里跑 `--shot` 验证播种；未提权时退化为
+   "exe 字节里找 `库索引.json`"的静态校验（原来的 `dist/预设` 计数在单文件下必然为 0）。
+9. 设置「日志与诊断」：`打开日志 / 打开诊断` → `打开日志 / 导出诊断包`
+   （诊断目录由导出动作自己打开）。顺手修数据目录行的 `打开` 48→52、`…` 34→38
+   （小于文字需要宽度，展开抽屉后版式体检报异常）。
+
+测试：apptest +7（诊断包四件套 / 脱敏 / 无截图 / 精确到秒）。
+
+### 2026-11-07 20:40 v1.23 补丁：Win10 浅色主题白屏
+
+用户 Win10 实测截图：设置抽屉整片白、浅灰字看不见；开发机 Win11 深色主题复现不出来。
+
+- **根因**：`QScrollArea` 的 viewport 是 Qt 内部控件，`autoFillBackground=True`，
+  填系统 palette 的 `Base` 色。开发机是 `#2d2d2d`（深色主题），Win10 是 `#ffffff`。
+  整套配色是 `rgba(255,255,255,N)` 叠深色底的半透明层 → 白底上就是白板。
+- **修法**：① `QApplication.setPalette(T.dark_palette())`，在建任何控件之前，
+  颜色与 QSS 同源；② `viewport().setAutoFillBackground(False)` + QSS
+  `QScrollArea > QWidget > QWidget { background: transparent; }`。
+- ⚠ **验收陷阱**：`QPalette()` 默认构造跟随本机系统主题，深色机器上测不出来。
+  必须显式造 `Base=#ffffff / Window=#f0f0f0` 的浅色调色板再建 Shell。
+  修复前抽屉中部像素 `#f0f0f0`，修复后 `#1b1e23`（数据来自 `w.grab().toImage()` 取点）。
+- 教训：**任何依赖系统主题的默认值都是隐患**。深色 UI 必须在 QApplication 上钉死
+  palette，不能指望 QSS 覆盖全部 —— QSS 按选择器匹配，Qt 内部控件（viewport、
+  弹窗列表、菜单、提示气泡）没有 id 可写。
+
+
+### 2026-11-07 20:36 v1.23 补丁：内置预设从来没被用过
+
+用户真机 20:25 报「还没有采集区域 —— 把游戏窗口调成 16:9 标准尺寸后重试」，
+可 InfoBar 明明写着「16:9 ✓」「区域：未标定」。
+
+- **层一**：单文件版没播种预设（`_MEIPASS` 里的 `预设/` 没搬到 exe 旁边）。
+- **层二，更根本**：`RosterEngine._load_region_preset()` 的 docstring 写着
+  「没有就用内置预设」，代码只读了 `输出/区域.json` 就返回 —— 旧工具
+  `App._load_cfg` 的第二级回退（`load_preset()` + 按当前窗口比例换算）**从 v1.0
+  起就没搬过来**。所以就算预设文件在，也一样用不上。
+- 修：`main.py` 建 Shell 之前 `A._seed_presets()`；新增
+  `RosterEngine._apply_builtin_preset()`，在 `_start_now()` 里 `win` 已接上之后调
+  （换算要窗口的高与宽高比，`prepare()` 阶段还没窗口）。
+- 文案：比例对不上时要**说清哪一边不对**（"内置预设是在 1220x686 上标的，
+  当前窗口宽高比 1.333 对不上"），不要笼统说"调成 16:9"。
+- ⚠ **为什么开发机一直没暴露**：源码态 `05-工具/预设/昵称列预设.json` 一直在，
+  且 `输出/区域.json`（开发机标定过）走了快路径，第二级回退从来没执行。
+  **只在干净机器上才踩得到** —— 以后测"新用户首启"必须清空 `输出/` 和预设。
+
+---
+
+### 2026-11-07 20:50 v1.24：Esc 停不住 + 热键作用域
+
+**Esc 停不住名单采集（用户真机）**，三层叠加：
+
+1. Esc 监听没开 —— `state_sig` 只播 `_continuous`，导航期是 False → 轮询器根本没启动。
+2. `stop_capture()` 只处理 `_continuous`，导航阶段空操作。
+3. **导航结束 `_poll_nav` 自动开滚采** —— 按停止反而把采集"启动"了。
+4. 顺带：`_toggle_roster` 判 `self._bridge._busy`，那是旧工具 `toggle_auto` 的旗标，
+   headless 路径永远不设 → 主按钮在采集中点第二次也是"开始"。
+
+修：`heartbeat` 的 busy 含 `_nav_running`；`stop_capture` 置 `_cancelled` + `_nav_cancel`
++ 停 `_nav_timer` + `cancel_auto`；`_poll_nav` 查 `_cancelled`；`_nav_done` 覆写后
+立刻 `_poll_nav()`（不等 300 ms，否则界面闪一句"名单已存入"）；主按钮判定改
+`_continuous or _nav_running`。
+
+**热键作用域**：`RegisterHotKey` 独占，在浏览器里按 F3/F4 既吃掉按键又触发采集。
+改成**按前台窗口动态注册**：`win.in_scope()` 判进程 == 本进程（含弹窗）或根窗口 ==
+游戏 hwnd，`Shell._scope_timer` 每 300 ms 判一次，离开就注销、回来再注册。
+`Hotkeys` 拆成 `install`（记绑定）+ `set_scope`（注册/注销），hotkey id 用绑定序号。
+
+⚠ 坑：重构 `hotkey.py` 时留下了一个重复的 `_unregister_all`（后定义的覆盖前面的），
+表现为"注销后 `names()` 还是旧的"。**改完类方法要 `grep -c "def xxx"` 数一遍**。
+
+---
+
+### 2026-11-07 21:00 v1.25：运行数据搬家（%APPDATA%）
+
+用户要求参考 ArcanaHelper：「启动客户端时的文件释放要规范一点，不能在当前文件夹里直接释放」。
+
+- 参考程序实测布局（**只读目录，没运行它**，AGENTS 红线）：
+  `%APPDATA%\ArcanaHelper\{config.json, log\, log\pic\, log-<id>.zip, <时间戳>\temp\}`
+  —— exe 旁边零残留。
+- 新增 `05-工具/appdir.py`，只提供 `app_dir()`：
+  冻结态 exe 旁**已有** `预设/` → 便携模式用它；否则 `%APPDATA%\OrangeHelper`。
+  源码态 = `05-工具`。
+- ⚠ **必须抽成独立文件**：`alliance_ocr` 与 `booklib` 互相 import（前者用后者路径、
+  后者用前者判据），各写一份 `_app_dir()` 必然漂移 —— 漂了就是"预设在一处、
+  成员库在另一处"，用户看到的是名单一夜之间没了。
+- 老用户自动走便携分支，不迁移、不丢库；想整文件夹拷走就先建空 `预设/`。
+- `OUT_DIR.mkdir()` 包了 try：`%APPDATA%` 不可写不该拦启动。
+- `build.py::verify_onefile` 双重断言：`APPDATA` 指临时目录跑 `--shot`，确认数据目录
+  有 32 个预设 + `NOTICE.txt`；且 **exe 所在目录跑完只剩 exe 自己**（多一个文件就退出）。
+  `_selftest()` 改成返回 bool，静态分支不再假装做过动态检查。
+
+---
+
+## 项目全史（v1.0 → v1.25）
 
 > 逐版的修法细节在上面的日期小节里；这里只留**脉络与结论**，用于一次读完就知道
 > 这个项目为什么长成现在这样。
@@ -868,5 +1002,32 @@ F 区快捷键、实时跟随、强制 16:9。
 **发布红线（下次打包必须复查）**：
 1. `发布预设/成员库/*.json` 的 `names` 必须为空；
 2. 不含 `昵称库.json`（旧单库里有真实名单与别名）；
-3. `dist/预设/` 与 `_internal/预设/` 都要查一遍 —— 后者来自 `--add-data`，
-   历史上有过一次把开发目录整个打进去的写法。
+3. 单文件版外面没有 `dist/预设/` 可查 —— 预设内嵌在 exe 里。`verify_onefile()`
+   会在临时 `APPDATA` 里真跑一次，确认 32 个预设播进 `%APPDATA%\OrangeHelper`，
+   并断言 **exe 旁边只剩 exe 自己**（多一个文件就拒绝出包）。
+
+
+### 阶段六：发布前收尾与真机回归（v1.23 → v1.25）
+
+v1.22 交付后用户连着报了一串问题，全部由真机截图 / 日志驱动，每一轮都挖出
+"开发机上根本复现不了"的结构性缺陷：
+
+| 版本 | 用户看到的 | 真正的根因 |
+|---|---|---|
+| v1.23 | 想发出去但产物是 200+ 文件 | 只有 onedir |
+| v1.23 | 出问题没法查 | 打包后 `stdout` 为 `None`，日志一片空白 |
+| v1.23 | Win10 设置页整片白 | `QScrollArea` viewport 吃系统调色板（浅色 = 白） |
+| v1.23 | 明明 16:9 却报"没有采集区域" | 内置预设从 v1.0 起就没被读过 |
+| v1.24 | 按 Esc 停不住，页面还在动 | 导航期不监听 + 取消后自动开滚采 |
+| v1.24 | 快捷键在别的程序里也触发 | `RegisterHotKey` 独占，没做作用域 |
+| v1.25 | 启动时在文件夹里释放文件 | 数据目录挂在 exe 旁边 |
+
+**贯穿结论**：
+
+1. **只在干净机器上才暴露的问题，开发机永远测不到。** 预设回退、首启播种、
+   浅色主题，三个都是被"本机有历史状态"掩盖的。验收里"全新目录 + 临时 APPDATA"
+   这一条必须真跑，不能靠源码态推断。
+2. **Windows 的独占 API 不能靠回调过滤。** `RegisterHotKey` 注册期间按键压根
+   不给别的程序，想"只在某些窗口生效"只能动态注册/注销。
+3. **能复现才有资格说修好了。** 白屏用显式浅色 palette 复现、Esc 用状态竞争
+   复现，两次都是先看到"坏的样子"再动代码。
