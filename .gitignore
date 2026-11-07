@@ -1,5 +1,6 @@
 # ---- 构建产物 ----
 dist/
+dist_new/
 build/
 build_dev/
 *.pyz
