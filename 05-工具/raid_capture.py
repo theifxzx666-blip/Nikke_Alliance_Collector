@@ -500,8 +500,16 @@ class CaptureEngine:
                             if r.get("member") and r.get("damage") is not None
                             and not self._contains(rows, r)]
                     if lost:
-                        rows, _m2 = self._dedupe(rows + lost)
-                        self.say(f"补回 {len(lost)} 条被位移跳过的行")
+                        # 按这一屏里的原始下标插回去，**不能 append**：追加会让本该在
+                        # 第 3 条位置的行跑到列表末尾，和实机的顺序对不上（v1.43）。
+                        # 基准沿用 patch 那套 `base = len(rows) - len(last_rows)`。
+                        base = len(rows) - len(last_rows)
+                        for r in lost:
+                            idx = next((i for i, x in enumerate(recs) if x is r), 0)
+                            pos = min(max(0, base + idx), len(rows))
+                            rows.insert(pos, r)
+                        rows, _m2 = self._dedupe(rows)
+                        self.say(f"补回 {len(lost)} 条被位移跳过的行（已插回原位）")
                     last_rows = recs
                     fixed = len(info.get("patch") or [])
                     self.say(f"拼接 +{info.get('added', 0)} 条（位移 {info.get('shift_rows')} 行，"
@@ -537,14 +545,36 @@ class CaptureEngine:
                     recs2, _loc2 = read_hard(img, eng, self._roster, self._bosses)
                     _n0 = len(rows)
                     if recs2:
-                        rows, _m2 = self._dedupe(rows + recs2)
+                        # 回扫补进来的行也要插到"它在屏幕上的邻居旁边"，不能 append。
+                        # 反向时屏幕是从旧到新、rows 也是，所以用**屏幕下方那一行**
+                        # 当锚点，插到它前面；找不到锚点才放末尾（v1.43）。
+                        for _i2, _r2 in enumerate(recs2):
+                            if self._contains(rows, _r2):
+                                continue
+                            _anchor = None
+                            for _nxt in recs2[_i2 + 1:]:
+                                _anchor = next((j for j, x in enumerate(rows)
+                                                if self._same_rec(x, _nxt)), None)
+                                if _anchor is not None:
+                                    break
+                            rows.insert(_anchor if _anchor is not None else len(rows), _r2)
+                        rows, _m2 = self._dedupe(rows)
                         self.emit_rows(rows)
                     # 连续 3 屏没有任何新增 → 已经在顶部（列表到底时"滚不动"和
                     # "全都在表里"是同一个现象，只能靠连续次数区分）
                     _still = _still + 1 if len(rows) == _n0 else 0
+                    # 每 5 屏报一次：不然中间几十秒界面全黑，像卡住了（用户反馈）
+                    if _k % 5 == 0:
+                        self.say(f"严格回扫 {_k} 屏 · 累计 {len(rows)} 条")
                     if _still >= 3:
                         break
-                self.say(f"严格采集完成：这一遍补进 {len(rows) - _before_all} 条")
+                _added = len(rows) - _before_all
+                if _added:
+                    self.say(f"严格采集完成：回扫 {_k + 1} 屏 · 补进 {_added} 条 "
+                             f"→ 正向确实漏了，结算前建议都开着")
+                else:
+                    self.say(f"严格采集完成：回扫 {_k + 1} 屏 · 一条没补 "
+                             f"→ 正向已采全，这次严格模式白跑一趟")
 
             # 收工自检：这两条不拦流程，只把"可能有问题"当场说出来。
             # 以前要等导出后人工翻 CSV 才发现，代价太大。
