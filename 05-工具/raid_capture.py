@@ -462,8 +462,15 @@ class CaptureEngine:
                                   f"（这屏 {len(loc.cards)} 张卡 → {len(recs)} 条）")
                 if rows is None:
                     rows, last_rows, box, pitch = recs, recs, loc.box, loc.pitch
+                    # v1.48：首屏这 6 条**必须也打屏号**。之前漏了这一步，
+                    # 它们在最终 sort 里全是默认的 9999，被后面每一屏的记录挤到末尾 ——
+                    # 实测 02:32 那轮实机第 1 条 `大魔王·重装火神R` 直接排没了。
+                    for _r in rows:
+                        _r.setdefault("_pass", i)
                     self.last_pitch = pitch
-                    self.say(f"首屏 {len(recs)} 条 · 行距 {pitch:.0f}px")
+                    # 带上名字：首屏丢了哪一条、读成什么，只有这里能看出来
+                    self.say(f"首屏 {len(recs)} 条 · 行距 {pitch:.0f}px · "
+                             + "、".join((r.get("member") or "?") for r in recs[:6]))
                 else:
                     shift, corr = None, 0.0
                     if last is not None and box:
@@ -531,7 +538,10 @@ class CaptureEngine:
                         break
                     miss = back = 0
                     if info.get("patch"):
-                        base = len(rows) - len(last_rows)
+                        # 上一屏如果发生过合并，len(rows) 会比 len(last_rows) 还小，
+                        # 这条减法就地变负数，`0 <= base+idx` 全不成立 —— patch 一条都
+                        # 打不上（v1.48）。取非负，并在日志里报出来便于核对。
+                        base = max(0, len(rows) - len(last_rows))
                         for idx, rec in info["patch"]:
                             if 0 <= base + idx < len(rows):
                                 rows[base + idx] = rec
