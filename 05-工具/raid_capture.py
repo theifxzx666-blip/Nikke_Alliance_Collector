@@ -940,7 +940,9 @@ class CaptureEngine:
                 # ---- 打位置：**从重叠区的内容反算绝对坐标**，不累加、不靠像素
                 if rows:
                     _offset, _ncal = self._offset_from_content(rows, recs, _offset, pitch)
-                    _moved = round((_offset - _last_off) / pitch) if pitch else 0
+                    # v1.59：保留一位小数。滚 2.5 行被 round 成 2 会掩盖提速是否生效
+                    # （用户就是靠"位移几行"判断的，日志不能说谎）。
+                    _moved = round((_offset - _last_off) / pitch, 1) if pitch else 0
                 for _r in recs:
                     _r["_gy"] = int(_offset + int(_r.get("_y") or 0))
                 if rows is None:
@@ -957,7 +959,7 @@ class CaptureEngine:
                     self.last_splice = {"added": _add, "hit": _hit,
                                         "overlap": len(recs), "patch": [],
                                         "shift_rows": _moved}
-                    self.say(f"拼接 +{_add} 条（位移 {_moved} 行，"
+                    self.say(f"拼接 +{_add} 条（位移 {_moved:g} 行，"
                              f"重叠 {_hit}/{len(recs)}"
                              + (f" · 更新 {_upd} 条读数" if _upd else "")
                              + f" · {time.time() - _t_s:.1f}s）")
