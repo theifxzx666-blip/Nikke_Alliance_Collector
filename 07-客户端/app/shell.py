@@ -223,6 +223,7 @@ class Shell(QWidget):
         self._shortcuts()
 
         self.engine = Engine()
+        self.engine.deep = bool(self.cfg.get("deep_scan", False))   # v1.40 严格采集
         self.engine.rect_rel = self._load_rect()
         self.engine.logged.connect(self.say)
         self.engine.rowsChanged.connect(self._on_rows)
@@ -839,6 +840,15 @@ class Shell(QWidget):
         self.opt_follow = self._switch(bool(self.cfg.get("follow", True)))
         self.opt_follow.toggled.connect(self._on_follow_toggled)
         self._row_setting(sec.lay, "表格跟随最新", self.opt_follow)
+
+        # v1.40：严格采集。到底后再从下往上扫一遍 —— 正向被裁在边缘的行，
+        # 反向时是中间行，漏采和残读都能被覆盖掉。代价是时间翻倍。
+        self.opt_deep = self._switch(bool(self.cfg.get("deep_scan", False)))
+        self.opt_deep.setToolTip("从底部往回再扫一遍（时间约翻倍）\n"
+                                 "适合结算前最后核对：边缘行在反方向会完整露一次，\n"
+                                 "漏采和误读基本归零")
+        self.opt_deep.toggled.connect(self._on_deep_toggled)
+        self._row_setting(sec.lay, "严格采集（慢）", self.opt_deep)
 
         # ---- 快捷键（默认折叠：装好就不动的项，不该占常用项的位置）
         sec = self._add_section(body, "keys", "快捷键",
@@ -2357,6 +2367,13 @@ class Shell(QWidget):
         S.save_settings(pin=bool(v))
         if bool(v) != self._pin:
             self.toggle_pin()
+
+    def _on_deep_toggled(self, v):
+        """严格采集开关：落到配置 + 立刻同步给引擎（采集中也能切，下一轮生效）。"""
+        self.cfg["deep_scan"] = bool(v)
+        S.save_settings(deep_scan=bool(v))
+        if getattr(self, "engine", None) is not None:
+            self.engine.deep = bool(v)
 
     def _on_follow_toggled(self, v):
         self.cfg["follow"] = bool(v)

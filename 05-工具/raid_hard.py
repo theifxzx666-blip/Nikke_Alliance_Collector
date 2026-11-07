@@ -191,21 +191,11 @@ def read_hard(img, eng, roster=None, bosses=None):
                 c["member_note"] = f"库归位 {c['member']}→{fixed}"
                 c["member"] = fixed
 
-        # ---- 边缘行：被列表上下边切掉的行不写进结果（v1.37）
-        #
-        # `raid_core._mark_partial` 早就标好了两个标记：
-        #   `partial`  成员名字高矮一截 → 整行只露了半截
-        #   `clipped`  BOSS 行压到列表上下边缘
-        # 但**从来没人消费** —— 半行数据就这样一路写进 CSV。实测：
-        #   #65  成员空、BOSS 位读成 `RT3`、伤害串带空格
-        #   `が闹诊`（应为 `别闹`）、`EV3L2`
-        # 这些行在相邻屏里一定完整出现过（滚 2 行、屏幕 6 行，中间 4 行总是完整的），
-        # 交给拼接就行，不必冒险把残行当新数据。
-        if c.get("partial"):
-            continue
-        if c.get("clipped") and not c.get("boss"):
-            continue                    # 压边但 BOSS 补认成功了 → 内容完整，照常收
-
+        # v1.40：这里曾经按 `partial`/`clipped` 丢掉"被列表上下边切掉的行"。
+        # 实测三轮否掉了这个做法（26 屏丢了 52 行，同一轮里残行照样漏进来）——
+        # 判据本身依赖几何阈值（字高比例、BOSS 框是否压边），换个窗口尺寸就漂。
+        # 丢错了是**永久丢数据**，所以改回全都收：重叠合并负责去重、复核负责标记。
+        # 边缘行交给「严格采集」（双向扫描）覆盖，见 §45.3。
         if c.get("member") or c.get("boss") or c.get("damage") is not None:
             # 整行置信度取三个字段里的**最低分**：短板决定这条能不能信。
             # 不用平均分——一个字段 0.4 另一个 1.0，平均出 0.7 会骗人。

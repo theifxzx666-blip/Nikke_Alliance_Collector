@@ -505,6 +505,36 @@ class CaptureEngine:
                 last = img
                 raw, _s, _st = A.wait_settled(region, raw)
                 img = self._crop(raw)
+            # ---- v1.40 严格采集：到底后再从下往上扫一遍 ----
+            #
+            # 为什么有用：正向扫描时被裁在上下边缘的行，反向时它是中间行。
+            # 同一个物理行两个方向各完整露一次，边缘就不再是"只露半截"的单点。
+            # 代价是拖动次数翻倍（约 +90 秒），所以做成开关，默认关。
+            if getattr(self, "deep", False) and rows and not self._stop.is_set():
+                self.say("严格采集：从底部往回再扫一遍…")
+                _before_all = len(rows)
+                _still = 0
+                for _k in range(80):
+                    if self._stop.is_set():
+                        break
+                    if not self._drag_list(region, int(min(A.DRAG_MAX, max(
+                            A.MIN_DRAG_PX, pitch * self.SCROLL_ROWS))), up=True):
+                        break
+                    last = img
+                    raw, _s, _st = A.wait_settled(region, raw)
+                    img = self._crop(raw)
+                    recs2, _loc2 = read_hard(img, eng, self._roster, self._bosses)
+                    _n0 = len(rows)
+                    if recs2:
+                        rows, _m2 = self._dedupe(rows + recs2)
+                        self.emit_rows(rows)
+                    # 连续 3 屏没有任何新增 → 已经在顶部（列表到底时"滚不动"和
+                    # "全都在表里"是同一个现象，只能靠连续次数区分）
+                    _still = _still + 1 if len(rows) == _n0 else 0
+                    if _still >= 3:
+                        break
+                self.say(f"严格采集完成：这一遍补进 {len(rows) - _before_all} 条")
+
             # 收工自检：这两条不拦流程，只把"可能有问题"当场说出来。
             # 以前要等导出后人工翻 CSV 才发现，代价太大。
             _rows = rows or []

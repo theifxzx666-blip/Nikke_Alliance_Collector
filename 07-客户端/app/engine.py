@@ -35,6 +35,9 @@ class Engine(QObject, CaptureEngine):
         self._bosses = []
         self._thread = None
         self._eng = None
+        # v1.40 严格采集：到底后再从下往上扫一遍。边缘行在另一个方向会变成中间行，
+        # 漏采和残读都能被覆盖掉。时间翻倍，默认关，由设置页的开关控制。
+        self.deep = False
 
     # ---------------- 宿主接口（引擎只认这几个） ----------------
     def say(self, msg, level="INFO"):
