@@ -116,17 +116,40 @@ class CaptureEngine:
             pass
         return True
 
-    def _measure(self, region, a, b):
-        """只在**框选区域**内量位移，且带方向。
+    def _shift_by_template(self, prev_raw, cur_raw):
+        """用模板匹配求当前帧相对上一帧的位移。返回 (px, 峰值)。正数 = 内容上移。
 
-        为什么必须裁到框内：`measure_vshift` 把每行压成一个笔迹强度标量，
-        整屏里标题栏 / 日期 tab / 左右面板 / 底部按钮全都是不动的，那些行占多数，
-        相关性最高的位移永远落在 0。实测（困难样张，框内内容移动 240px）：
-            整屏测 → 0px（相关 0.63）      框内测 → 240px（相关 0.94）
-        这正是"用户明明看见画面动了、程序却报 0px"的一半原因。
-        另一半是方向：向上滚时内容下移，只搜正位移的函数同样只能给 0。
+        为什么不用"整帧相关"（旧的 `A.measure_vshift_signed`）：那个把每行压成
+        一个笔迹强度标量再找相关峰。这个画面只有名字/数字在变、布局完全不动，
+        大部分行压出来完全相同 —— 相关性最高的位移恒为 0（v1.56 整页崩掉、
+        以及"回顶"把没到顶误判成到顶，都是它）。
+        换成 ScrollUnroll / image-stitch 那一派的做法：从当前帧取**一条横带**，
+        到上一帧里找它。只要那条带上有文字，位置就是唯一的。
         """
-        return A.measure_vshift_signed(self._crop(a), self._crop(b))
+        try:
+            import cv2
+            import numpy as np
+            a = np.asarray(self._crop(prev_raw).convert("L"), dtype=np.float32)
+            b = np.asarray(self._crop(cur_raw).convert("L"), dtype=np.float32)
+            h, w = min(a.shape[0], b.shape[0]), min(a.shape[1], b.shape[1])
+            if h < 80 or w < 80:
+                return None, 0.0
+            a, b = a[:h, :w], b[:h, :w]
+            bh = max(24, h // 8)
+            y0 = max(0, min(h - bh, h // 3))      # 避开被裁的上下边
+            band = b[y0:y0 + bh, :]
+            # 纯色/近乎纯色的横带，matchTemplate 会给一个假峰（常数区域相关系数
+            # 没有定义，OpenCV 直接返回 1.0）—— 必须先看方差，没有纹理就不表态。
+            if float(band.std()) < 8.0:
+                return None, 0.0
+            res = cv2.matchTemplate(a, band, cv2.TM_CCOEFF_NORMED)
+            _mn, mx, _ml, loc = cv2.minMaxLoc(res)
+            if mx < 0.55:                          # 没认出来，别硬报一个位移
+                return None, float(mx)
+            return int(loc[1] - y0), float(mx)
+        except Exception:
+            A.log_exc("hard-shift")
+            return None, 0.0
 
     @staticmethod
     def _same_rec(a, b):
@@ -358,10 +381,10 @@ class CaptureEngine:
                 self.say("框太矮，拖不动 —— 重新框选一个更高的区域", "WARN")
                 return
             cur, _s, _st = A.wait_settled(region, prev)
-            shift, corr = self._measure(region, prev, cur)
+            shift, corr = self._shift_by_template(prev, cur)
             # 向上拖时内容往下走，位移是**负的**；比大小时必须取绝对值，
             # 否则每次都被当成"没动"——这就是"拉不回顶部 / 一直撞满次数"的根因。
-            if corr >= 0.3 and abs(shift or 0) < max(6.0, pitch * 0.35):
+            if corr >= 0.55 and abs(shift or 0) < max(6.0, pitch * 0.35):
                 still += 1
                 # **连续两次没动就收手，不管之前有没有移动过。**
                 # 原来要求 moved>0 才算到顶，于是"一开始就不动"（已经在顶部，
@@ -884,8 +907,8 @@ class CaptureEngine:
                 _prev = raw
                 raw, _s, _st = A.wait_settled(region, raw)
                 img = self._crop(raw)
-                _sh, _co = self._measure(region, _prev, raw)
-                if _sh is not None and _co >= 0.3 and abs(_sh) >= 5:
+                _sh, _co = self._shift_by_template(_prev, raw)
+                if _sh is not None and abs(_sh) >= 5:
                     _offset += abs(int(_sh))
                 else:
                     _offset += pitch * self.SCROLL_ROWS

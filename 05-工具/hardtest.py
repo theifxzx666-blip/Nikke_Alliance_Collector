@@ -447,10 +447,10 @@ class _Scroll(CE):
         self.screen += 1
         return True
 
-    def _measure(self, region, a, b):
-        # **恒为 0**：复刻 04:37 那轮的现场 —— 画面明明动了，像素相关量成 0。
-        # 现在定位改用内容反算，所以这个值只影响"预测下一屏起算点"，不影响顺序。
-        return (0, 0.9)
+    def _shift_by_template(self, prev_raw, cur_raw):
+        # **量不出来**：复刻 04:37 那轮（位移报 0）的现场。
+        # 现在定位改用内容反算，这个值只影响"预测下一屏起算点"，不影响顺序。
+        return (None, 0.0)
 
 
 def _read(img, eng, roster=None, bosses=None):
@@ -533,6 +533,28 @@ _vo3 = {"member": "甲", "boss": "铁匠", "pct": "", "damage": 5,
 CE._merge_obs(_vo3, {"member": "甲", "boss": "医师", "pct": "", "damage": 5,
                      "damage_raw": "5", "conf": 0.95})
 check("投票：平票看置信度", _vo3["boss"] == "医师", str(_vo3))
+# --- 模板匹配：真的能量出位移（用两张合成图，位移已知）
+import numpy as _np
+from PIL import Image as _Image
+
+_rng = _np.random.default_rng(7)
+_big = _rng.integers(0, 256, (900, 471), dtype=_np.uint8)
+_prev = _Image.fromarray(_big[0:532])
+_cur = _Image.fromarray(_big[172:172 + 532])
+_e = CE()
+_e.rect_rel = None                     # 不裁，直接用整图
+_sh, _score = _e._shift_by_template(_prev, _cur)
+check("模板匹配：内容上移 172px 就量出 172", _sh == 172, str(_sh))
+check("模板匹配：峰值够高", (_score or 0) > 0.9, str(_score))
+
+_cur2 = _Image.fromarray(_big[0:532])
+_sh2, _score2 = _e._shift_by_template(_prev, _cur2)
+check("模板匹配：同一张图 → 位移 0", _sh2 == 0, str(_sh2))
+
+_blank = _Image.fromarray(_np.full((532, 471), 240, dtype=_np.uint8))
+_sh3, _score3 = _e._shift_by_template(_blank, _blank)
+check("模板匹配：纯色图认不出就返回 None（不硬报位移）", _sh3 is None, str(_sh3))
+
 
 print()
 if fail:
