@@ -597,6 +597,13 @@ class CaptureEngine:
                     # 每 5 屏报一次，不然中间几十秒界面全黑，像卡住了。
                     # 带上"本屏有几条已在表里"—— 这就是回扫的重叠校验，
                     # 和正向那句 `重叠 4/4` 是同一个意思（v1.45）。
+                    # 表格跟着回扫位置走（v1.46）：找这一屏的行在表里的位置
+                    if recs2:
+                        _pos = next((j for j, x in enumerate(rows)
+                                     if any(self._same_rec(x, _r) for _r in recs2)), None)
+                        _sig = getattr(self, "scrollRow", None)
+                        if _pos is not None and _sig is not None:
+                            _sig.emit(_pos)
                     if _k % 5 == 0:
                         _hit = sum(1 for x in recs2 if self._contains(rows, x)) if recs2 else 0
                         self.say(f"严格回扫 {_k} 屏 · 累计 {len(rows)} 条 · "

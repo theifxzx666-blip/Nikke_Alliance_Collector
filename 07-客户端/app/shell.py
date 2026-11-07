@@ -227,6 +227,7 @@ class Shell(QWidget):
         self.engine.rect_rel = self._load_rect()
         self.engine.logged.connect(self.say)
         self.engine.rowsChanged.connect(self._on_rows)
+        self.engine.scrollRow.connect(self._on_scroll_row)
         self.engine.finished.connect(self._on_done)
         self.engine.attached.connect(self._on_attached)
 
@@ -2119,6 +2120,19 @@ class Shell(QWidget):
                  "pct": r.get("pct") or "",
                  "conf": r.get("conf")}
                 for i, r in enumerate(rows, 1)]
+
+    def _on_scroll_row(self, row):
+        """回扫时把表格滚到正在核对的位置（v1.46）。
+
+        用户反馈：回扫那三分钟里表格一直停在底部，看不出它在往回走。
+        这里只**跟随显示**，不改数据 —— 数据仍由 rowsChanged 驱动。
+        """
+        if self._mode != 1 or not self._rows:
+            return
+        r = max(0, min(int(row), len(self._rows) - 1))
+        idx = self.model.index(r, 0)
+        self.table.scrollTo(idx, QAbstractItemView.PositionAtCenter)
+        self.follow.setText("↑ 回扫核对中")
 
     def _on_rows(self, rows):
         """伤害采集推来的行：**永远先落真源**，只有当前在伤害页才渲染。

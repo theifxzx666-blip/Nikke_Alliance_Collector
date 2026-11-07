@@ -21,6 +21,7 @@ from raid_hard import load_bosses, read_hard
 
 class Engine(QObject, CaptureEngine):
     rowsChanged = Signal(list)
+    scrollRow = Signal(int)        # 回扫时把表格滚到指定行（v1.46）
     finished = Signal()
     logged = Signal(str)
     attached = Signal(bool, str, str, str)   # ok, 标题, 分辨率, 徽标
