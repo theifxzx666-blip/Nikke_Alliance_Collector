@@ -639,25 +639,49 @@ class CaptureEngine:
             return True
         return False
 
-    @staticmethod
-    def _merge_obs(old, new) -> None:
-        """同一位置的两份观测合成一份：缺的补上，分高的读数胜出。"""
-        for k in ("member", "boss", "pct"):
-            if not (old.get(k) or "") and (new.get(k) or ""):
-                old[k] = new[k]
-        if not (old.get("member_note") or "") and (new.get("member_note") or ""):
-            old["member_note"] = new["member_note"]
-        if not (old.get("boss_note") or "") and (new.get("boss_note") or ""):
-            old["boss_note"] = new["boss_note"]
-        nd, od = new.get("damage"), old.get("damage")
-        if od is None and nd is not None:
-            old["damage"], old["damage_raw"] = nd, new.get("damage_raw") or ""
-        elif (nd is not None and od is not None and nd != od
-              and (new.get("conf") or 0) > (old.get("conf") or 0)):
-            # 伤害不等却同位置：谁的分高信谁的（低分那份就是读歪的那次）
-            old["damage"], old["damage_raw"] = nd, new.get("damage_raw") or ""
+    _OBS_FIELDS = ("member", "boss", "pct", "damage")
+
+    @classmethod
+    def _merge_obs(cls, old, new) -> None:
+        """同一位置的多份观测**逐字段投票**：多数胜，平票才看置信度。
+
+        为什么投票而不是"取分最高"：同一行被相邻 3 屏各读一次，某个字段
+        错 1 次、对 2 次时，取最高分只会在两份里挑一份（可能挑错），而投票
+        能直接把错的那一份投掉。
+        这就是"多识别几次"的正确形态 —— **次数本来就够，以前没投票**。
+        """
+        def _snap(d):
+            return {"member": d.get("member"), "boss": d.get("boss"),
+                    "pct": d.get("pct"), "damage": d.get("damage"),
+                    "damage_raw": d.get("damage_raw"), "conf": d.get("conf")}
+
+        obs = old.get("_obs")
+        if not obs:
+            obs = [_snap(old)]
+            old["_obs"] = obs
+        obs.append(_snap(new))
+
+        for k in cls._OBS_FIELDS:
+            votes = {}
+            for o in obs:
+                v = o.get(k)
+                if v in (None, ""):
+                    continue          # 缺字段不投票，别把"空"投成多数
+                votes.setdefault(v, []).append(o.get("conf") or 0)
+            if not votes:
+                continue
+            win = max(votes, key=lambda v: (len(votes[v]), max(votes[v])))
+            if old.get(k) != win:
+                old[k] = win
+                if k == "damage":
+                    src = max((o for o in obs if o.get("damage") == win),
+                              key=lambda o: o.get("conf") or 0)
+                    old["damage_raw"] = src.get("damage_raw") or ""
         if (new.get("conf") or 0) > (old.get("conf") or 0):
             old["conf"] = new["conf"]
+        for k in ("member_note", "boss_note"):
+            if not (old.get(k) or "") and (new.get(k) or ""):
+                old[k] = new[k]
 
     def _absorb(self, rows, rec, pitch) -> str:
         """把一份新观测并进 rows（按 `_gy` 定位）。返回 'new' / 'upd'。
@@ -696,37 +720,51 @@ class CaptureEngine:
                 upd += 1
         return add, upd
 
-    def _calibrate(self, offset, rows, recs, pitch):
-        """用重叠区反校累计位移，把 `_gy` 拉回**同一个坐标系**。返回 (offset, 用了几条)。
+    @staticmethod
+    def _same_physical(a, b) -> bool:
+        """够硬的身份证据 —— **专门用来算坐标**，不能用 `_compatible` 那种宽松判据。
 
-        这是 v1.56 最关键的一步。`_offset` 是一屏一屏累加测量位移得来的，
-        每次都有 ±px 噪声，26 屏能攒出小半行 —— 于是同一行在不同屏拿到不同的
-        `_gy`，最终排序就错位。这里每屏都拿"已经认识的行"反算一次中位数偏差，
-        把误差在当屏吃掉，不让它累积。
+        `_compatible` 允许"伤害差 20%"，是为了"同一位置的两份读数能不能并"
+        （宁可并错也不能多一行）。但拿它配对算坐标就太松了：11 位伤害差 20%
+        可以是两个完全不同的人，配错了坐标整屏都会歪。
         """
-        deltas = []
+        ad, bd = a.get("damage"), b.get("damage")
+        if ad is not None and bd is not None and ad == bd:
+            return True
+        ma, mb = (a.get("member") or ""), (b.get("member") or "")
+        if not ma or ma != mb:
+            return False
+        pa, pb = (a.get("pct") or ""), (b.get("pct") or "")
+        return bool(pa) and pa == pb and (a.get("boss") or "") == (b.get("boss") or "")
+
+    def _offset_from_content(self, rows, recs, fallback, pitch):
+        """从"重叠区里认出来的行"直接反算这一屏的**绝对**坐标。返回 (offset, 票数)。
+
+        为什么不用增量：`offset += 位移` 每屏都有 ±px 噪声，26 屏攒得出两行；
+        更要命的是像素相关在这类画面上经常量成 0（只有名字/数字在变、布局完全
+        不动，相关性最高的位移就是 0 —— 04:37 那轮整页崩掉就是这个）。
+        只要有两行被认出来，`旧行._gy − 观测.y` 就是绝对坐标，和历史无关。
+        """
+        cands = []
         for r in recs:
             y = r.get("_y")
             if y is None:
                 continue
-            guess = offset + int(y)
-            near, best = None, None
             for x in rows:
                 gx = x.get("_gy")
                 if gx is None:
                     continue
-                d = abs(int(gx) - guess)
-                if best is None or d < best:
-                    near, best = x, d
-            if near is None or best > pitch * 0.8:
-                continue
-            if not self._compatible(near, r):
-                continue
-            deltas.append(int(near["_gy"]) - guess)
-        if len(deltas) < 2:
-            return offset, len(deltas)
-        deltas.sort()
-        return offset + deltas[len(deltas) // 2], len(deltas)
+                if self._same_physical(x, r):
+                    cands.append(int(gx) - int(y))
+        if len(cands) < 2:
+            return fallback, len(cands)
+        cands.sort()
+        mid = cands[len(cands) // 2]
+        near = [c for c in cands if abs(c - mid) <= pitch * 0.6]
+        if len(near) < 2:
+            return fallback, len(near)
+        near.sort()
+        return near[len(near) // 2], len(near)
 
     def capture(self, region, from_nav: bool = False):
         """滚采整页。`from_nav=True` = 记录页是刚刚由导航点开的。
@@ -771,8 +809,9 @@ class CaptureEngine:
             except Exception:
                 A.log_exc("hard-top")
 
-            _offset = 0.0        # 从列表顶部起累计滚过的像素
-            _shift_px = 0        # 上一屏→这一屏的位移（日志用）
+            _offset = 0.0        # 这一屏的绝对坐标（从内容反算，不累加）
+            _last_off = 0
+            _moved = 0
             _still = 0
             _k = -1
             for _k in range(MAX_SCREENS):
@@ -789,29 +828,55 @@ class CaptureEngine:
                     self._edge_dropped = getattr(self, "_edge_dropped", 0) + _drop
                     A.log("hard", f"边缘残行丢弃 {_drop} 条"
                                   f"（这屏 {len(loc.cards)} 张卡 → {len(recs)} 条）")
-                # ---- 打位置：先校准累计位移（把误差当屏吃掉），再算 `_gy`
+                # ---- 打位置：**从重叠区的内容反算绝对坐标**，不累加、不靠像素
                 if rows:
-                    _offset, _ncal = self._calibrate(_offset, rows, recs, pitch)
+                    _offset, _ncal = self._offset_from_content(rows, recs, _offset, pitch)
+                    _moved = round((_offset - _last_off) / pitch) if pitch else 0
                 for _r in recs:
                     _r["_gy"] = int(_offset + int(_r.get("_y") or 0))
                 if rows is None:
                     rows = []
                     self._absorb_all(rows, recs, pitch)
+                    _add = len(recs)
                     self.say(f"首屏 {len(recs)} 条 · 行距 {pitch:.0f}px · "
                              + "、".join((r.get("member") or "?") for r in recs[:6]))
                 else:
                     _add, _upd = self._absorb_all(rows, recs, pitch)
                     self.last_splice = {"added": _add, "hit": len(recs) - _add,
                                         "overlap": len(recs), "patch": [],
-                                        "shift_rows": round(_shift_px / pitch) if pitch else 0}
-                    self.say(f"拼接 +{_add} 条（位移 {round(_shift_px / pitch) if pitch else 0} 行，"
+                                        "shift_rows": _moved}
+                    self.say(f"拼接 +{_add} 条（位移 {_moved} 行，"
                              f"重叠 {len(recs) - _add}/{len(recs)}"
                              + (f" · 更新 {_upd} 条读数" if _upd else "") + "）")
+                _last_off = _offset
                 self.emit_rows(rows)
-
                 if self._stop.is_set():
                     break
-                # ---- 滚一屏，量位移
+
+                # ---- 到底判定：**连续两屏都没有新记录**。
+                # 不用像素位移判：这类画面（只有名字/数字在变、布局完全不动）
+                # 的像素相关经常量成 0，用它判到底会半路收工（04:37 那轮）。
+                if _add == 0:
+                    _still += 1
+                    if _still == 1:
+                        self.say("这一屏没有新记录（拖动可能没生效）→ 加大步长再试一次", "WARN")
+                        if not self._drag_list(region, int(min(A.DRAG_MAX, max(
+                                A.MIN_DRAG_PX, pitch * self.SCROLL_ROWS * 2)))):
+                            break
+                        raw, _s, _st = A.wait_settled(region, raw)
+                        img = self._crop(raw)
+                        continue
+                    self.say("列表到底了：连续两屏没有新记录", "WARN")
+                    try:
+                        self._fill_bottom(rows, recs + self._extra_read(region, eng))
+                        self.emit_rows(rows)
+                    except Exception:
+                        A.log_exc("hard-fill-bottom")
+                    break
+                _still = 0
+
+                # ---- 滚一屏。位移只用来**预测**下一屏的起算点，下一屏会被
+                # 内容反算覆盖掉；量不出来就按计划步长推进，保证坐标一定在走。
                 dist = int(min(A.DRAG_MAX, max(A.MIN_DRAG_PX, pitch * self.SCROLL_ROWS)))
                 if not self._drag_list(region, dist):
                     self.say("拖动出不了手（框太小）→ 收工", "WARN")
@@ -820,39 +885,10 @@ class CaptureEngine:
                 raw, _s, _st = A.wait_settled(region, raw)
                 img = self._crop(raw)
                 _sh, _co = self._measure(region, _prev, raw)
-                if _sh is not None and _co >= 0.3:
+                if _sh is not None and _co >= 0.3 and abs(_sh) >= 5:
                     _offset += abs(int(_sh))
-                    _shift_px = abs(int(_sh))
                 else:
-                    # 量不出来就按"这次打算滚多少"推进。否则后面每一屏都会落在
-                    # 同一个位置上，整页挤成一团 —— 比多滚一点糟得多。
                     _offset += pitch * self.SCROLL_ROWS
-                    _shift_px = int(pitch * self.SCROLL_ROWS)
-                if _sh is not None and abs(_sh) < 5:
-                    _still += 1
-                    if _still == 1:
-                        self.say(f"拖动没挪动（实测位移 {_sh}px · 相关 {_co:.2f}）"
-                                 f"→ 加大步长再试一次", "WARN")
-                        if not self._drag_list(region, int(min(A.DRAG_MAX, max(
-                                A.MIN_DRAG_PX, pitch * self.SCROLL_ROWS * 2)))):
-                            break
-                        _p2 = raw
-                        raw, _s, _st = A.wait_settled(region, raw)
-                        img = self._crop(raw)
-                        _sh2, _co2 = self._measure(region, _p2, raw)
-                        if _sh2 is not None and _co2 >= 0.3:
-                            _offset += abs(int(_sh2))
-                            _shift_px = abs(int(_sh2))
-                        if _sh2 is not None and abs(_sh2) >= 5:
-                            continue
-                    self.say("列表到底了：拖动不再产生位移", "WARN")
-                    try:
-                        self._fill_bottom(rows, recs + self._extra_read(region, eng))
-                        self.emit_rows(rows)
-                    except Exception:
-                        A.log_exc("hard-fill-bottom")
-                    break
-                _still = 0
             # v1.54：成员额度锚定放在最终排序**之前** —— 归位后可能撞成同一条，
             # 还能被下面那次去重收掉；报告也要早于"超过 3 条"，否则用户看到
             # 某人 4 条会先怀疑是重复采集。

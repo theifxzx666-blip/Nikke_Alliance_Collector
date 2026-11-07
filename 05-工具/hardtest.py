@@ -448,8 +448,9 @@ class _Scroll(CE):
         return True
 
     def _measure(self, region, a, b):
-        # 到底之后不动；之前每次故意偏 8px（真值 200）
-        return (0, 0.9) if self.screen * _STEP > 6 * _PITCH else (_STEP + 8, 0.9)
+        # **恒为 0**：复刻 04:37 那轮的现场 —— 画面明明动了，像素相关量成 0。
+        # 现在定位改用内容反算，所以这个值只影响"预测下一屏起算点"，不影响顺序。
+        return (0, 0.9)
 
 
 def _read(img, eng, roster=None, bosses=None):
@@ -492,23 +493,46 @@ check("读歪的那份观测被同一位置的好读数盖掉",
       all((r.get("conf") or 0) >= 0.9 for r in _rows),
       str([(r["member"], r["conf"]) for r in _rows if (r.get("conf") or 0) < 0.9]))
 
-# --- 校准本身：位移读数一直偏 8px，26 屏就攒出两行多，必须在每屏被吃掉
-_cal = _Scroll()
-_rows = []
+# --- 内容定位：像素位移完全不可用时，坐标仍然必须准
+_loc_rows = []
+_eng2 = _Scroll()
 for _k in range(4):
-    _cal.screen = _k
     _recs, _l = _read(_Img(_k), None)
-    if _rows:
-        _cal._offset, _n = _cal._calibrate(_cal._offset, _rows, _recs, _PITCH)
+    if _loc_rows:
+        _eng2._offset, _n = _eng2._offset_from_content(_loc_rows, _recs,
+                                                      _eng2._offset, _PITCH)
     for _r in _recs:
-        _r["_gy"] = int(_cal._offset + int(_r["_y"]))
-    _cal._absorb_all(_rows, _recs, _PITCH)
-    _cal._offset += _STEP + 8
-check("校准把累计漂移吃掉了（4 屏偏 32px → 修回真值附近）",
-      all(abs(int(r["_gy"]) - (100 + int(r["member"][1:]) * _PITCH)) <= 20
-          for r in _rows),
-      str([(r["member"], r["_gy"]) for r in _rows[:5]]))
+        _r["_gy"] = int(_eng2._offset + int(_r["_y"]))
+    _eng2._absorb_all(_loc_rows, _recs, _PITCH)
+    _eng2._offset += _STEP          # 预测值；下一屏会被内容反算覆盖
+check("内容反算：四屏下来坐标仍落在真值上",
+      all(abs(int(r["_gy"]) - (100 + int(r["member"][1:]) * _PITCH)) <= 1
+          for r in _loc_rows),
+      str([(r["member"], r["_gy"]) for r in _loc_rows[:5]]))
+check("内容反算：条数不重复（4 屏覆盖 12 条）", len(_loc_rows) == 12, f"{len(_loc_rows)} 条")
 
+# --- 多份观测投票
+_vo = {"member": "空木", "boss": "铁匠", "pct": "50.0%",
+       "damage": 100, "damage_raw": "100", "conf": 0.90}
+CE._merge_obs(_vo, {"member": "空本", "boss": "铁匠", "pct": "50.0%",
+                    "damage": 100, "damage_raw": "100", "conf": 0.95})
+CE._merge_obs(_vo, {"member": "空木", "boss": "铁匠", "pct": "50.0%",
+                    "damage": 101, "damage_raw": "101", "conf": 0.99})
+check("投票：名字 2 票 空木 vs 1 票 空本 → 空木", _vo["member"] == "空木", _vo["member"])
+check("投票：伤害 2 票 100 vs 1 票 101 → 100", _vo["damage"] == 100, str(_vo["damage"]))
+check("投票：damage_raw 跟着赢家走", _vo["damage_raw"] == "100", _vo["damage_raw"])
+
+_vo2 = {"member": "甲", "boss": "", "pct": "", "damage": 5,
+        "damage_raw": "5", "conf": 0.8}
+CE._merge_obs(_vo2, {"member": "甲", "boss": "铁匠", "pct": "", "damage": 5,
+                     "damage_raw": "5", "conf": 0.7})
+check("投票：缺字段不投票（空的不投成多数）", _vo2["boss"] == "铁匠", str(_vo2))
+
+_vo3 = {"member": "甲", "boss": "铁匠", "pct": "", "damage": 5,
+        "damage_raw": "5", "conf": 0.80}
+CE._merge_obs(_vo3, {"member": "甲", "boss": "医师", "pct": "", "damage": 5,
+                     "damage_raw": "5", "conf": 0.95})
+check("投票：平票看置信度", _vo3["boss"] == "医师", str(_vo3))
 
 print()
 if fail:
