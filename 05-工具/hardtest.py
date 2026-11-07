@@ -203,6 +203,31 @@ _out6, _n6 = raid_capture.CaptureEngine._dedupe(_diff)
 check("字面同形的短名同伤害按同读法合并（困难模式取舍）",
       len(_out6) == 1, f"留下 {len(_out6)} 合并 {_n6}")
 
+# 21:36 那轮的真实形态：同一条记录被两屏读成 7,057,526,552 / 7,057,526,352（差 200），
+# 伤害不等 → 旧判据认不出重复，同一个人多出一条。血量百分比相同是关键判据：
+# 真打两刀时 BOSS 已经掉血，百分比不可能一样。
+_apx = [rec("村里响当当", "重装火神R", 7057526552, pct="34.7%"),
+        rec("村里响当当", "重装火神R", 7057526352, pct="34.7%")]
+_apx[0]["conf"], _apx[1]["conf"] = 0.885, 0.734
+_out7, _n7 = raid_capture.CaptureEngine._dedupe(_apx)
+check("同血量同成员、伤害读错一位 → 合并为一条",
+      len(_out7) == 1 and _n7 == 1, f"留下 {len(_out7)} 合并 {_n7}")
+check("合并后留置信度高的那个读数",
+      _out7 and _out7[0]["damage"] == 7057526552 and _out7[0]["conf"] == 0.885,
+      str(_out7[0] if _out7 else {}))
+
+# 反例：血量不同就是真两刀，绝不能合并
+_out8, _n8 = raid_capture.CaptureEngine._dedupe(
+    [rec("甲", "古铁", 7057526552, pct="34.7%"),
+     rec("甲", "古铁", 7057526352, pct="30.1%")])
+check("血量不同 → 不同刀，不合并", len(_out8) == 2 and _n8 == 0, f"留下 {len(_out8)}")
+
+# 反例：差 0.8% 不是"读错一位"，是两次不同的输出
+_out9, _n9 = raid_capture.CaptureEngine._dedupe(
+    [rec("甲", "古铁", 7057526552, pct="34.7%"),
+     rec("甲", "古铁", 7000000000, pct="34.7%")])
+check("差 0.8% → 不按读错处理", len(_out9) == 2 and _n9 == 0, f"留下 {len(_out9)}")
+
 # ---------------- v1.17：导航点进来的页面不该再回顶
 import threading                                          # noqa: E402
 import alliance_ocr as A                                   # noqa: E402

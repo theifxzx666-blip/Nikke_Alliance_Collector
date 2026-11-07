@@ -134,15 +134,29 @@ class CaptureEngine:
         超短名（≤3 字）放宽到 0.5：11 位伤害相同已是主判据，成员名只是双保险。
         实测 15:30 那轮「蕭白/萧白」同伤害两字名 ratio 恰好 0.5，被 0.6 挡住
         → 同一条记录读出两种写法各留一行，人数也虚报 1。
+
+        **伤害不等也可能同一条**（v1.26）：同一个人在**剩余血量百分比完全相同**的
+        前提下，两屏读出的伤害只差千分之一以内 —— 这是同一刀的数字被读错一位。
+        实测 21:36 那轮「村里响当当」的 `7,057,526,552` 和 `7,057,526,352`
+        差 200，去重认不出，同一条记录占了两行。
+        血量百分比相同是关键判据：真打两刀时 BOSS 已经掉血，百分比不可能一样。
         """
         ad, bd = a.get("damage"), b.get("damage")
-        if ad is None or bd is None or ad != bd:
+        if ad is None or bd is None:
             return False
         ma, mb = a.get("member") or "", b.get("member") or ""
-        r = difflib.SequenceMatcher(None, ma, mb).ratio()
-        if r >= 0.6:
-            return True
-        return min(len(ma), len(mb)) <= 3 and r >= 0.5
+        if ad == bd:
+            r = difflib.SequenceMatcher(None, ma, mb).ratio()
+            if r >= 0.6:
+                return True
+            return min(len(ma), len(mb)) <= 3 and r >= 0.5
+        if not ma or ma != mb:
+            return False
+        pa, pb = (a.get("pct") or "").strip(), (b.get("pct") or "").strip()
+        if not pa or pa != pb:
+            return False
+        big = max(abs(ad), abs(bd))
+        return big > 0 and abs(ad - bd) <= big * 0.001
 
     @classmethod
     def _contains(cls, rows, rec):
@@ -181,6 +195,10 @@ class CaptureEngine:
                 if not dup.get(k) and r.get(k):
                     dup[k] = r[k]
             if (r.get("conf") or 0) > (dup.get("conf") or 0):
+                # 伤害不等却判成同一条时（数字读错一位），谁的分高信谁的
+                if dup.get("damage") != r.get("damage"):
+                    dup["damage"] = r.get("damage")
+                    dup["damage_raw"] = r.get("damage_raw") or dup.get("damage_raw") or ""
                 dup["conf"] = r["conf"]
         return out, merged
 
