@@ -488,6 +488,78 @@ try:
 finally:
     A.grab, A.wait_settled, RH.read_hard = _orig_deep
 
+# ---------------- v1.55 残行归并 ----------------
+#
+# 实测 03:54 那轮：两轮采完仍留着 #34（无名无 BOSS）和 #36（空本，与 #35 空木
+# 同一刀、伤害差 0.86%）。这一组按真实数值复刻，并给每条规则各配一个反例。
+class _Rec(CE):
+    def __init__(self, names, pitch=86.0):
+        self._roster = {"names": {n: {} for n in names}} if names else None
+        self._bosses = []
+        self.last_pitch = pitch
+
+
+_full = dict(member="空木", boss="邪魔", damage=11096802360,
+             damage_raw="11,096,802,360", pct="11.1%", conf=0.999)
+
+# 1) 有名残行：名字像 0.50 + 伤害差 0.86% → 并进完整行（03:54 的 #36 → #35）
+_rows = [dict(_full, _gy=1000),
+         dict(member="空本", boss="", damage=11000902260,
+              damage_raw="11 000 902 260", pct="", conf=0.692, _gy=1086)]
+_n, _d, _m = _Rec(["空木"])._reconcile_partial(_rows, 86.0)
+check("有名残行按名字+伤害归并", _n == 1 and _d == 0 and len(_rows) == 1, _m)
+check("归并后留下的是干净读数",
+      _rows[0]["member"] == "空木" and _rows[0]["boss"] == "邪魔", str(_rows[0]))
+check("归并记进 member_note", "并掉 1 条残读" in (_rows[0].get("member_note") or ""),
+      str(_rows[0].get("member_note")))
+
+# 2) 无名无 BOSS：有位置且对方满 3 刀 → 按位置归并（03:54 的 #34 → #35）
+_full3 = [dict(_full, _gy=1000), dict(_full, boss="铁匠", damage=9000000000,
+                                      damage_raw="9,000,000,000", pct="50.0%", _gy=1400),
+          dict(_full, boss="古铁", damage=8000000000,
+               damage_raw="8,000,000,000", pct="40.0%", _gy=1800)]
+_rows = [dict(r) for r in _full3] + [
+    dict(member="", boss="", damage=11000000000, damage_raw="11,000,000,000",
+         pct="", conf=0.859, _gy=1040)]
+_n, _d, _m = _Rec(["空木"])._reconcile_partial(_rows, 86.0)
+check("无名残行按位置归并（同位置）", _n == 1 and _d == 0 and len(_rows) == 3, _m)
+
+# 3) 无名无 BOSS 且位置离得远 → 丢弃并点名（无法归属）
+_rows = [dict(_full, _gy=1000)] + [
+    dict(member="", boss="", damage=11000000000, damage_raw="11,000,000,000",
+         pct="", conf=0.859, _gy=5000)]
+_n, _d, _m = _Rec(["空木"])._reconcile_partial(_rows, 86.0)
+check("无名残行归并不了就丢弃", _n == 0 and _d == 1 and len(_rows) == 1, _m)
+check("丢弃时把伤害和 conf 写出来", "11,000,000,000" in _m and "0.86" in _m, _m)
+
+# 4) 有名但伤害差太远 → 不动（留给复核，别硬并）
+_rows = [dict(_full, _gy=1000),
+         dict(member="空本", boss="", damage=5000000000,
+              damage_raw="5,000,000,000", pct="", conf=0.6, _gy=1000)]
+_n, _d, _m = _Rec(["空木"])._reconcile_partial(_rows, 86.0)
+check("伤害差太远就不并", _n == 0 and _d == 0 and len(_rows) == 2, _m)
+
+# 5) 完整行之间一律不动（哪怕伤害很像、名字很像）
+_rows = [dict(_full, _gy=1000), dict(_full, boss="铁匠", _gy=1086)]
+_n, _d, _m = _Rec(["空木"])._reconcile_partial(_rows, 86.0)
+check("完整行之间不合并", _n == 0 and _d == 0 and len(_rows) == 2, _m)
+
+# 6) 名字同样像的两个候选 → 不表态（第二候选 0.50，差距 0）
+_rows = [dict(_full, member="空木", _gy=1000),
+         dict(member="空水", boss="邪魔", damage=11100000000,
+              damage_raw="11,100,000,000", pct="10.0%", conf=0.9, _gy=2000),
+         dict(member="空本", boss="", damage=11000902260,
+              damage_raw="11 000 902 260", pct="", conf=0.692, _gy=3000)]
+_n, _d, _m = _Rec(["空木", "空水"])._reconcile_partial(_rows, 86.0)
+check("候选不分伯仲就不并", _n == 0 and len(_rows) == 3, _m)
+
+# 7) 残行的位置归并还要"那个人满 3 刀"这道闸
+_rows = [dict(_full, _gy=1000)] + [
+    dict(member="", boss="", damage=11000000000, damage_raw="11,000,000,000",
+         pct="", conf=0.859, _gy=1040)]
+_n, _d, _m = _Rec(["空木"])._reconcile_partial(_rows, 86.0)
+check("对方没满 3 刀就不按位置并（可能是真漏的那一刀）", _n == 0 and _d == 1, _m)
+
 print()
 if fail:
     print(f"失败 {len(fail)} 项：" + "、".join(fail))

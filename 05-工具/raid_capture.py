@@ -573,6 +573,121 @@ class CaptureEngine:
         kept, _m = self._dedupe(sub)
         return len(kept)
 
+    def _reconcile_partial(self, rows, pitch: float = 0.0):
+        """收工整理：把"缺 成员 / BOSS / 伤害"的残行并掉或丢弃。
+
+        实测 03:54 那轮，两轮严格采集跑完仍留着三条：
+
+            #34  (空)   (空)   11,000,000,000   (空)    conf 0.859
+            #35  空木   邪魔   11,096,802,360   11.1%   conf 0.999   ← 干净读数
+            #36  空本   (空)   11 000 902 260   (空)    conf 0.692
+
+        `空木` 已有 3 条，96 条真数据全在，98 = 96 + 这两条多余。
+        **它们不是"没读到"，是同一条记录被读成了三行** —— `_same_rec` 要求伤害
+        相对差 <= 0.1%，差 0.86% 就认不出，`_contains` 也就不认，三行全留在表里。
+
+        为什么不靠"再扫一遍"：两轮的几何**完全一样**（同一框、同一步长、同一落点），
+        同一物理行每次都落在同一个 y 上，读歪的方式一模一样 —— 两次相同的观察
+        互相救不了。严格采集只治"漏采"，治不了"读歪后多出一行"。
+
+        三条证据（只处理不完整的行，完整行之间一律不动）：
+          · 名字：相似度 >= 0.5 且唯一最优（次优差 0.15 以上）—— 主判据
+          · 位置：`_gy` 差 <= 0.6 个行距 —— 残行没名字时的唯一依据，
+            并要求对方那个人已经满 3 刀（多出来的这条必然是重复）
+          · 数值：伤害相对差 <= 5%（有名）/ 3%（无名）—— 否决权
+
+        只允许"残行 -> 完整行"这一个方向。返回 (并掉几条, 丢弃几条, 说明串)。
+        """
+        if not rows:
+            return 0, 0, ""
+        pitch = float(pitch or self.last_pitch or 0) or 86.0
+
+        def _cnt() -> dict:
+            c = {}
+            for r in rows:
+                m = r.get("member") or ""
+                if m:
+                    c[m] = c.get(m, 0) + 1
+            return c
+
+        merged = dropped = 0
+        notes, gone = [], []
+        i = 0
+        while i < len(rows):
+            bad = rows[i]
+            miss = [k for k in ("member", "boss") if not (bad.get(k) or "").strip()]
+            if bad.get("damage") is None:
+                miss.append("damage")
+            if not miss:
+                i += 1
+                continue
+            bd = bad.get("damage")
+            bname = (bad.get("member") or "").strip()
+            bgy = bad.get("_gy")
+            cnt = _cnt()
+
+            scored = []
+            for j, r in enumerate(rows):
+                if j == i:
+                    continue
+                if not (r.get("member") and r.get("boss") and r.get("damage") is not None):
+                    continue
+                rel = None
+                if bd is not None and r.get("damage"):
+                    rel = abs(bd - r["damage"]) / max(abs(bd), abs(r["damage"]), 1)
+                pos = None
+                if bgy is not None and r.get("_gy") is not None:
+                    pos = abs(int(bgy) - int(r["_gy"])) / pitch
+                sim = self._name_sim(bname, r["member"]) if bname else 0.0
+                scored.append((r, rel, pos, sim))
+
+            target, why = None, ""
+            if bname:
+                pick = sorted(((sim, rel, r) for r, rel, pos, sim in scored
+                               if sim >= 0.5 and rel is not None and rel <= 0.05),
+                              key=lambda t: -t[0])
+                if pick and (len(pick) == 1 or pick[0][0] - pick[1][0] >= 0.15):
+                    target = pick[0][2]
+                    why = f"名字像 {pick[0][0]:.2f} · 伤害差 {pick[0][1]:.2%}"
+            else:
+                # 没名字就只能靠位置；再加一条"那个人已经满 3 刀"——
+                # 满额的人不可能再多一刀，眼前这条必然是重复，并掉是安全的。
+                pick = sorted(((pos, rel, r) for r, rel, pos, sim in scored
+                               if pos is not None and pos <= 0.6
+                               and rel is not None and rel <= 0.03
+                               and cnt.get(r["member"], 0) >= 3),
+                              key=lambda t: t[0])
+                if pick and (len(pick) == 1 or pick[1][0] - pick[0][0] >= 0.25):
+                    target = pick[0][2]
+                    why = f"同位置（差 {pick[0][0]:.2f} 行）· 伤害差 {pick[0][1]:.2%}"
+
+            if target is not None:
+                _n = target.get("member_note") or ""
+                target["member_note"] = ((_n + " · ") if _n else "") + \
+                    f"并掉 1 条残读（{bname or '无名字'}，{why}）"
+                notes.append(f"{bname or '无名字'}→{target['member']}（{why}）")
+                rows.pop(i)
+                merged += 1
+                continue
+            if not bname and not (bad.get("boss") or "").strip():
+                # 既没成员又没 BOSS：无法归属到任何人，留着只是让用户手工删。
+                gone.append(f"伤害 {bad.get('damage_raw') or bad.get('damage') or '?'} · "
+                            f"conf {float(bad.get('conf') or 0):.2f}")
+                rows.pop(i)
+                dropped += 1
+                continue
+            i += 1
+
+        msg = ""
+        if merged:
+            msg = f"残行归并：{merged} 条（" + "；".join(notes[:3]) + \
+                  ("…" if len(notes) > 3 else "") + "）"
+        if dropped:
+            msg += ("；" if msg else "") + \
+                f"丢弃 {dropped} 条无名无 BOSS 的残行（" + "；".join(gone[:2]) + \
+                "）—— 无法归属到任何人；如果总数比实机少，就是它"
+        return merged, dropped, msg
+
     def _anchor_members(self, rows, limit: int = 3):
         """收工前的成员锚定：用「库闭集 + 3 刀额度」把读歪的名字归位。
 
@@ -883,6 +998,17 @@ class CaptureEngine:
             # 还能被下面那次去重收掉；报告也要早于"超过 3 条"，否则用户看到
             # 某人 4 条会先怀疑是重复采集。
             if rows:
+                # v1.55：先把"缺字段的残行"并掉/丢掉，再归位成员名。
+                # 顺序不能反：残行往往带着一个读歪的名字，先归位的话它会跟
+                # 干净行抢同一个候选（两边都像 `空木`），反而更难判。
+                try:
+                    _rm, _rd, _rmsg = self._reconcile_partial(rows, pitch)
+                    if _rmsg:
+                        self.say(_rmsg)
+                    if _rm or _rd:
+                        self.emit_rows(rows)
+                except Exception:
+                    A.log_exc("hard-reconcile")
                 try:
                     _na, _nmsg = self._anchor_members(rows)
                     if _nmsg:
@@ -917,7 +1043,14 @@ class CaptureEngine:
                      if not (r.get("member") and r.get("boss") and r.get("damage") is not None)]
             if _miss:
                 self.say(f"⚠ 第 {_miss} 条缺字段（导出时会再点名）", "WARN")
-            self.say(f"收工：{len(_rows)} 条 · {len({r['member'] for r in _rows})} 名成员")
+            _people = len({r["member"] for r in _rows if r.get("member")})
+            self.say(f"收工：{len(_rows)} 条 · {_people} 名成员")
+            # v1.55：条数对不上就当场说。一个人一轮 3 刀，差 2 条以上就不正常
+            # （1 条可能是有人只打了 2 刀，见 `浩然菌` 那种），不然用户只能手工数。
+            _short = 3 * _people - len(_rows)
+            if _people and _short >= 2:
+                self.say(f"⚠ {len(_rows)} 条 / {_people} 人 —— 满额应是 {3 * _people} 条，"
+                         f"少 {_short} 条（可能漏采，也可能有人没打完）", "WARN")
             if getattr(self, "_edge_dropped", 0):
                 self.say(f"（其中丢弃了 {self._edge_dropped} 条边缘残行 —— "
                          f"这个数偏大说明滚动的边界行裁得太狠）", "WARN")
