@@ -70,9 +70,14 @@ def boss_norm(name: str, bosses) -> str:
         head = [b for b in bosses if b[0] == name[0]]
         if len(head) == 1 and len(name) <= len(head[0]) + 1:
             return head[0]
+    # 兜底：本期 BOSS 是闭集，但要归得**有理有据**。
+    # `INNNA`/`2N`/`14` 这类一个字符都对不上的，best 的相似度是 0.00 —— 无条件归
+    # 只会写一个"看起来合法但其实瞎猜"的 BOSS，用户根本发现不了。
+    # 所以设 0.25 下限（`铁E` 0.50、`火神` 0.57、`惠医师` 0.80 都能过），
+    # 低于下限返回空串：复核会标「缺 BOSS」，人一看就知道那条要补。
     best = max(bosses, key=lambda b: difflib.SequenceMatcher(None, name, b).ratio())
     r = difflib.SequenceMatcher(None, name, best).ratio()
-    return best if r >= 0.6 else name
+    return best if r >= 0.25 else ""
 
 
 def _roi_member(left, cy, dmg_x0, pitch):
@@ -206,7 +211,12 @@ def read_hard(img, eng, roster=None, bosses=None):
             _bnote = c.get("boss_note") or ""
             if _boss != _boss_raw:
                 # 留一行原文，方便对着截图复核：归一不是"改对了"，是"按规则认出来了"
-                _bnote = f"{_bnote} · 归一自「{_boss_raw}」" if _bnote else f"归一自「{_boss_raw}」"
+                if not _boss:
+                    _bnote = (f"{_bnote} · BOSS 认不出「{_boss_raw}」" if _bnote
+                              else f"BOSS 认不出「{_boss_raw}」")
+                else:
+                    _bnote = (f"{_bnote} · 归一自「{_boss_raw}」" if _bnote
+                              else f"归一自「{_boss_raw}」")
             recs.append({"member": c.get("member") or "",
                          "boss": _boss,
                          "damage": c.get("damage"),
