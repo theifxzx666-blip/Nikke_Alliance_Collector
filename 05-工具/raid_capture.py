@@ -193,6 +193,18 @@ class CaptureEngine:
                         continue
                     dup = old
                     break
+            else:
+                # 伤害读残的行（实测 #87：`9,791,211,2` 末尾少了两位 → 解析成 None）：
+                # 主判据拿不到伤害，但 成员 + BOSS + 剩余血量 三项全同就是同一条。
+                # 不合并的话它会变成这个人的"第 4 条"，触发「超过 3 刀」误报。
+                for old in reversed(out[-40:]):
+                    if (old.get("damage") is not None
+                            and (old.get("member") or "") == (r.get("member") or "")
+                            and (old.get("boss") or "") == (r.get("boss") or "")
+                            and (old.get("pct") or "")
+                            and old.get("pct") == (r.get("pct") or "")):
+                        dup = old
+                        break
             if dup is None:
                 out.append(r)
                 continue
@@ -201,8 +213,10 @@ class CaptureEngine:
                 if not dup.get(k) and r.get(k):
                     dup[k] = r[k]
             if (r.get("conf") or 0) > (dup.get("conf") or 0):
-                # 伤害不等却判成同一条时（数字读错一位），谁的分高信谁的
-                if dup.get("damage") != r.get("damage"):
+                # 伤害不等却判成同一条时（数字读错一位），谁的分高信谁的。
+                # 但**残行的 damage 是 None**，绝不能拿 None 盖掉好读数（实测 #87
+                # 的 conf 0.995 比正身的 0.981 高，一盖就把整行变成"缺伤害"）。
+                if r.get("damage") is not None and dup.get("damage") != r.get("damage"):
                     dup["damage"] = r.get("damage")
                     dup["damage_raw"] = r.get("damage_raw") or dup.get("damage_raw") or ""
                 dup["conf"] = r["conf"]
@@ -383,6 +397,13 @@ class CaptureEngine:
                 if not loc.cards:
                     self.say("这一屏没认到记录，收工")
                     break
+                # v1.37：边缘残行被 read_hard 丢了（partial / clipped 缺 BOSS）。
+                # 丢了多少必须留痕 —— 丢多了就是"明明 96 刀只采到 93 条"。
+                _drop = len(loc.cards) - len(recs)
+                if _drop > 0:
+                    self._edge_dropped = getattr(self, "_edge_dropped", 0) + _drop
+                    A.log("hard", f"边缘残行丢弃 {_drop} 条"
+                                  f"（这屏 {len(loc.cards)} 张卡 → {len(recs)} 条）")
                 if rows is None:
                     rows, last_rows, box, pitch = recs, recs, loc.box, loc.pitch
                     self.last_pitch = pitch
@@ -500,6 +521,9 @@ class CaptureEngine:
             if _miss:
                 self.say(f"⚠ 第 {_miss} 条缺字段（导出时会再点名）", "WARN")
             self.say(f"收工：{len(_rows)} 条 · {len({r['member'] for r in _rows})} 名成员")
+            if getattr(self, "_edge_dropped", 0):
+                self.say(f"（其中丢弃了 {self._edge_dropped} 条边缘残行 —— "
+                         f"这个数偏大说明滚动的边界行裁得太狠）", "WARN")
         except Exception as e:
             self.say(f"采集出错：{e}")
             A.log_exc("hard-run")
