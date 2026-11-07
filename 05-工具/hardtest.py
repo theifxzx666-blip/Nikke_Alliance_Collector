@@ -499,12 +499,11 @@ check("滚动采集：每条位置落在真值 1 行内",
 check("读歪的那份观测被同一位置的好读数盖掉",
       all((r.get("conf") or 0) >= 0.9 for r in _rows),
       str([(r["member"], r["conf"]) for r in _rows if (r.get("conf") or 0) < 0.9]))
-# v1.59 步长自适应：第一屏只敢走 2.0 行，连续两屏认得全了才升到 2.5 行。
-# 这两条一起构成"提速但不丢行"的前提 —— 没有升档说明参数没生效，
-# 中途一直不回到 2.0 说明"重叠变薄就退守"的闸门是坏的。
-check("步长自适应：先用 2.0 行起步", any(abs(d - 200) < 1 for d in _sc.dists),
-      str(_sc.dists))
-check("步长自适应：稳定后升到 2.5 行", any(abs(d - 250) < 1 for d in _sc.dists),
+# v1.59.1 步长锁在 2.0（行距整数倍）。这一段验的是"闸门本身的逻辑"：
+# 达标返回上限、不达标返回下限并清零。改 SCROLL_ROWS 试 3.0 行时这些断言跟着走。
+check("步长自适应：全程 2.0 行（行距整数倍，不留半行残片）",
+      all(abs(d - 200) < 1 for d in _sc.dists if d < 300), str(_sc.dists))
+check("步长自适应：到底重试才加大到上限", any(d >= 400 for d in _sc.dists),
       str(_sc.dists))
 
 # --- 内容定位：像素位移完全不可用时，坐标仍然必须准
@@ -612,14 +611,18 @@ _sp3._tune_speed(0, 200)           # 画面完全没动
 check("调速：位移 0（拖动失效）立刻降档", _sp3._lvl == 0, str(_sp3._lvl))
 
 # --- 步长自适应：升档要连续两屏，退档只要一屏不达标
-check("步长：首屏只走 2.0 行", CE._pick_rows(6, 4, 0) == (2.0, 1), str(CE._pick_rows(6, 4, 0)))
-check("步长：连准两屏升到 2.5 行", CE._pick_rows(6, 4, 1) == (2.5, 2), str(CE._pick_rows(6, 4, 1)))
-check("步长：只认出 4 条就退守 2.0",
-      CE._pick_rows(4, 4, 5) == (2.0, 0), str(CE._pick_rows(4, 4, 5)))
-check("步长：重叠只剩 2 条就退守 2.0",
-      CE._pick_rows(6, 2, 5) == (2.0, 0), str(CE._pick_rows(6, 2, 5)))
-check("步长：重叠 3 条仍可上 2.5（票数刚好够）",
-      CE._pick_rows(6, 3, 1) == (2.5, 2), str(CE._pick_rows(6, 3, 1)))
+check("步长：首屏走下限", CE._pick_rows(6, 4, 0) == (CE.SCROLL_ROWS_MIN, 1),
+      str(CE._pick_rows(6, 4, 0)))
+check("步长：连准两屏用上限", CE._pick_rows(6, 4, 1) == (CE.SCROLL_ROWS, 2),
+      str(CE._pick_rows(6, 4, 1)))
+check("步长：只认出 4 条就退守下限",
+      CE._pick_rows(4, 4, 5) == (CE.SCROLL_ROWS_MIN, 0), str(CE._pick_rows(4, 4, 5)))
+check("步长：重叠只剩 2 条就退守下限",
+      CE._pick_rows(6, 2, 5) == (CE.SCROLL_ROWS_MIN, 0), str(CE._pick_rows(6, 2, 5)))
+check("步长：重叠 3 条仍算达标（票数刚好够）",
+      CE._pick_rows(6, 3, 1) == (CE.SCROLL_ROWS, 2), str(CE._pick_rows(6, 3, 1)))
+check("步长必须是行距整数倍（2.5 会留半行残片）",
+      float(CE.SCROLL_ROWS).is_integer(), str(CE.SCROLL_ROWS))
 
 
 print()

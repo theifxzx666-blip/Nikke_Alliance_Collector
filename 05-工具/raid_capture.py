@@ -38,9 +38,11 @@ class CaptureEngine:
     # 每次滚多少行。2.5 → 2.0（v1.36）：5 轮真实样本里 165 人次漏了 7 条，
     # 全落在"步长偏了半行、边界行被两屏各裁一半"这种位置。滚 2 行时重叠 4 行，
     # 边界行在两屏都是完整行。代价是拖动次数 +25%（记录页 26 → 33 次，约 +30 秒）。
-    # v1.59：上限放到 2.5，但只在上一屏重叠 ≥5 条时才敢用（见 capture 的 _rows_now）。
-    SCROLL_ROWS = 2.5
-    SCROLL_ROWS_MIN = 2.0                       # 重叠变薄时的退守值
+    # v1.59 曾放到 2.5，真机 05:27 一轮立刻复现同一件事：半行偏移让上下沿各留一张
+    # 残片，两条 conf 0.35/0.65 的垃圾行夹在正常记录中间（98 条 / 34 人）。
+    # **行距必须整数倍** —— 这不是速率问题，是"卡片会不会被切成两半"的结构问题。
+    SCROLL_ROWS = 2.0
+    SCROLL_ROWS_MIN = 2.0                       # 重叠变薄时的退守值（现在两者相同）
 
     # 给调试面板看的现场快照（不算逻辑，只是留档）
     last_pitch = 0.0
@@ -136,9 +138,14 @@ class CaptureEngine:
     def _pick_rows(cls, n_recs, n_hit, good):
         """下一屏滚几行。返回 (行数, 新的连续达标计数)。
 
-        认全了（≥5 条）且重叠 ≥3 才敢上 2.5 行 —— 重叠是 `_offset_from_content`
+        认全了（≥5 条）且重叠 ≥3 才敢用上限 —— 重叠是 `_offset_from_content`
         的票源，票不够就会"坐标漂半行 → 同一条记录裂成两条"。而且要连续两屏
         达标才升，单屏达标就升会在漏字屏上来回抖。
+
+        ⚠ 2026-11-08：`SCROLL_ROWS` 现在是 2.0（= 下限），所以这道闸门暂时是
+        恒等的。**不是死代码** —— 它存在的理由是把"能不能多滚"的判断集中在一处。
+        真要试 3.0 行时只改常量，闸门和测试都跟着生效；但别再试 2.5/2.5 行距
+        这种非整数倍（见 `SCROLL_ROWS` 的注释）。
         """
         if n_recs >= 5 and n_hit >= 3:
             good += 1
@@ -149,13 +156,13 @@ class CaptureEngine:
     def _tune_speed(self, shift, dist):
         """按实测位移调拖动速度档位（0=107 / 1=136 / 2=176 px/s，v1.59）。
 
-        为什么现在敢调速：`_shift_by_template` 能给出**真实**位移。10:01 那轮
-        "试探 286px/s"之所以翻车，是因为当时相关峰恒为 0，测到的 188px 是松手后
-        惯性途中的假读数 —— 前提是假测量。现在位移可验证，闭环才成立。
+        入参的 `shift` 是**内容反算**出来的位移（`_offset` 的两屏差），不是
+        模板匹配的即时结果 —— 后者在模糊帧上会给偏差值，05:27 那轮因此升降档
+        横跳 6 次，而日志里 2.5 行一直很稳。内容反算晚一屏，但投票得出、可信。
 
-        甩动判据是**相对误差**而非绝对阈值：步长 2.0/2.5 行本来就不同，
-        只要实测和计划对得上就是没甩。`shift is None`（模板匹配没认出）
-        时**保持当前档不动** —— 不知道有没有甩，就不许加速。
+        甩动判据是**相对误差**：只要实测和拖出距离对得上就是没甩。
+        `shift is None`（量不出来）时**保持当前档不动** —— 不知道有没有甩，
+        就不许加速。
         """
         top = len(self.GAPS) - 1
         lvl = getattr(self, "_lvl", 0)
@@ -890,6 +897,7 @@ class CaptureEngine:
             self._gap = self.GAPS[0]
             self._bad = self._good = 0
             self._rows_good = 0
+            self._last_reach = 0          # 上一屏实际拖出的像素，供调速做基准
             raw = A.grab(region)
             img = self._crop(raw)
             # 先认一帧拿到行距，再把列表拉回第一行（只往下滚，从中间起采会漏上面）
@@ -919,8 +927,8 @@ class CaptureEngine:
             _moved = 0
             _still = 0
             _k = -1
-            # v1.59：本屏计划滚几行。只有"上一屏认全了、且重叠够厚"才敢用 2.5，
-            # 否则退回 2.0 —— 保证 `_offset_from_content` 至少有 3~4 条可投票。
+            # 本屏计划滚几行。步长闸门（`_pick_rows`）仍在，只是当前上下限都是 2.0
+            # —— 2.5 行会让卡片停在半行位置，上下沿各露一张残片，真机已验证。
             _rows_now = self.SCROLL_ROWS_MIN
             for _k in range(MAX_SCREENS):
                 if self._stop.is_set():
@@ -938,11 +946,14 @@ class CaptureEngine:
                     A.log("hard", f"边缘残行丢弃 {_drop} 条"
                                   f"（这屏 {len(loc.cards)} 张卡 → {len(recs)} 条）")
                 # ---- 打位置：**从重叠区的内容反算绝对坐标**，不累加、不靠像素
+                _delta = 0
+                _ncal = 0
                 if rows:
                     _offset, _ncal = self._offset_from_content(rows, recs, _offset, pitch)
-                    # v1.59：保留一位小数。滚 2.5 行被 round 成 2 会掩盖提速是否生效
+                    _delta = int(_offset - _last_off)
+                    # 保留一位小数：滚 2 行出头时被 round 成 2 会掩盖真实位移
                     # （用户就是靠"位移几行"判断的，日志不能说谎）。
-                    _moved = round((_offset - _last_off) / pitch, 1) if pitch else 0
+                    _moved = round(_delta / pitch, 1) if pitch else 0
                 for _r in recs:
                     _r["_gy"] = int(_offset + int(_r.get("_y") or 0))
                 if rows is None:
@@ -963,6 +974,13 @@ class CaptureEngine:
                              f"重叠 {_hit}/{len(recs)}"
                              + (f" · 更新 {_upd} 条读数" if _upd else "")
                              + f" · {time.time() - _t_s:.1f}s）")
+                # v1.59.1：调速改看**内容反算**的位移。
+                # 原来用 `_shift_by_template` 的即时结果，但它在模糊帧上会给出偏差值
+                # ——05:27 那轮因此升降档来回横跳 6 次（日志里 2.5 行明明稳定）。
+                # 内容反算是重叠行投票出来的中位数，晚一屏才拿到，但可信。
+                # 只在"这屏有新记录 + 至少 2 票"时调：到底那屏必然位移 0，不算数。
+                if _ncal >= 2 and _add > 0 and getattr(self, "_last_reach", 0):
+                    self._tune_speed(_delta, self._last_reach)
                 _last_off = _offset
                 self.emit_rows(rows)
                 if self._stop.is_set():
@@ -978,7 +996,7 @@ class CaptureEngine:
                         if not self._drag_list(region, int(min(A.DRAG_MAX, max(
                                 A.MIN_DRAG_PX, pitch * self.SCROLL_ROWS * 2)))):
                             break
-                        raw, _s, _st = A.wait_settled(region, raw, min_wait=0.24)
+                        raw, _s, _st = A.wait_settled(region, raw)
                         img = self._crop(raw)
                         continue
                     self.say("列表到底了：连续两屏没有新记录", "WARN")
@@ -997,14 +1015,19 @@ class CaptureEngine:
                     self.say("拖动出不了手（框太小）→ 收工", "WARN")
                     break
                 _prev = raw
-                raw, _s, _st = A.wait_settled(region, raw, min_wait=0.24)
+                # v1.59：稳定等待保持默认 300ms。试过压到 240ms，只省 0.06s/屏，
+                # 却让 176px/s 的惯性尾巴还没停就抓帧 —— 05:27 那轮两条 conf
+                # 0.35/0.65 的模糊行就是从这儿来的。**这 60ms 不能省。**
+                raw, _s, _st = A.wait_settled(region, raw)
                 img = self._crop(raw)
                 _sh, _co = self._shift_by_template(_prev, raw)
-                # v1.59：用实测位移闭环调速（甩动会被这里立刻发现并降档）。
-                # 基准取**实际拖出去的距离减去起手死区**，不是计划距离 ——
-                # 框矮时计划 215 只能拖 150，不减死区会把"框矮"误判成"甩动"。
-                _reach = max(1, getattr(self, "_last_drag_px", dist) - A.DRAG_SLOP)
-                self._tune_speed(_sh, _reach)
+                # 实际拖出去的距离，留给下一屏调速当基准。
+                # **不减 DRAG_SLOP**：05:27 的日志证明拖动 172px 内容就正好位移 2 行
+                # （86×2），是 1:1 的；再减 15px 等于人为造出 9.5% 的恒定误差，
+                # 叠加帧噪声就会频繁越过降档线。真有死区的机器上差 8.7%，
+                # 仍在 15% 容差内，不会误判。
+                _reach = max(1, getattr(self, "_last_drag_px", dist))
+                self._last_reach = _reach
                 if _sh is not None and abs(_sh) >= 5:
                     _offset += abs(int(_sh))
                 else:
