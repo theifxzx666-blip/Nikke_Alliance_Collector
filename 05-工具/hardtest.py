@@ -503,11 +503,10 @@ check("滚动采集：每条位置落在真值 1 行内",
 check("读歪的那份观测被同一位置的好读数盖掉",
       all((r.get("conf") or 0) >= 0.9 for r in _rows),
       str([(r["member"], r["conf"]) for r in _rows if (r.get("conf") or 0) < 0.9]))
-# v1.59.2 步长上限放到 3.0（仍是行距整数倍）。这一段验三件事：
-# 起步保守用 2.0、稳定后升到 3.0、框太矮时自动退回 2.0（别被截成非整数行）。
-check("步长自适应：起步 2.0、稳定后 3.0（都是整数倍）",
-      _sc.dists[:2] == [200, 200] and any(abs(d - 300) < 1 for d in _sc.dists),
-      str(_sc.dists))
+# v1.59.3 步长定稿 2.0（3.0 试过一轮，单屏反而更慢且出坏行，见 SCROLL_ROWS 注释）。
+# 这一段验的是"闸门本身的逻辑"：达标返回上限、不达标返回下限并清零。
+check("步长自适应：全程 2.0 行（行距整数倍，不留半行残片）",
+      all(abs(d - 200) < 1 for d in _sc.dists if d < 300), str(_sc.dists))
 check("步长自适应：到底重试才加大到上限", any(d >= 400 for d in _sc.dists),
       str(_sc.dists))
 check("框高够：550px 认 3 行", CE._rows_for_view(550, 86, 3.0) == 3.0,
