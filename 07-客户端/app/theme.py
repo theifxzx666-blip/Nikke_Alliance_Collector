@@ -222,6 +222,56 @@ def qss() -> str:
         border-radius: 6px; padding: 0 8px; min-height: 28px; max-height: 28px;
     }}
 
+    /* 滚动区：viewport 是 Qt 自己建的控件，默认填 palette 的 Base 色 ——
+       Win10 浅色主题下那是纯白，而本项目的卡片/输入框全是半透明白，
+       叠上去就是白板 + 浅灰字（设置抽屉整片看不见）。这里显式透明，
+       代码里再关掉 viewport 的 autoFillBackground 兜一层。 */
+    QScrollArea {{ background: transparent; border: none; }}
+    QScrollArea > QWidget > QWidget {{ background: transparent; }}
+
     /* 提示气泡 */
     QToolTip {{ background: #23262C; color: {TEXT}; border: 1px solid {BORDER}; padding: 4px 6px; }}
     """
+
+
+def dark_palette():
+    """统一的深色调色板：程序外观不再跟系统主题走。
+
+    为什么必须有这一层：Win10 浅色主题下，Qt **自己内部建**的控件 — QScrollArea
+    的 viewport、下拉弹窗的列表、菜单、提示气泡 — 吃的是系统 palette 的 Base 色
+    （= 白色）。本项目整套配色是 `rgba(255,255,255,N)` 叠在深色底上的半透明层，
+    压到白底上就变成"白板 + 浅灰字"，设置抽屉整片看不见（2026-11-07 用户 Win10 实测）。
+
+    QSS 只能盖住自己声明过的控件，盖不住这些内部控件；`Widget.setPalette()` 也不顶用
+    （子控件仍继承系统色）。唯一稳的办法是在 QApplication 上一次性钉死。
+
+    颜色与 QSS 同一来源，改令牌这里自动跟着变。
+    """
+    from PySide6.QtGui import QColor, QPalette as QP
+
+    base = QColor("#14171C")       # 与 QFrame#drawer / 毛玻璃底一致
+    surface = QColor("#1B1F25")
+    p = QP()
+    p.setColor(QP.Window, base)
+    p.setColor(QP.WindowText, QColor(TEXT))
+    p.setColor(QP.Base, base)
+    p.setColor(QP.AlternateBase, surface)
+    p.setColor(QP.Text, QColor(TEXT))
+    p.setColor(QP.Button, surface)
+    p.setColor(QP.ButtonText, QColor(TEXT))
+    p.setColor(QP.BrightText, QColor("#FFFFFF"))
+    p.setColor(QP.ToolTipBase, QColor("#23262C"))
+    p.setColor(QP.ToolTipText, QColor(TEXT))
+    p.setColor(QP.Highlight, QColor(ACCENT))
+    p.setColor(QP.HighlightedText, QColor("#FFFFFF"))
+    p.setColor(QP.Link, QColor("#7FB0FF"))
+    p.setColor(QP.PlaceholderText, QColor(TEXT_DIM))
+    p.setColor(QP.Light, QColor("#2A2F37"))
+    p.setColor(QP.Midlight, QColor("#23272F"))
+    p.setColor(QP.Mid, surface)
+    p.setColor(QP.Dark, QColor("#0E1014"))
+    p.setColor(QP.Shadow, QColor("#000000"))
+    # 禁用态：不给的话禁用按钮和可用的长得一模一样
+    for role in (QP.Text, QP.WindowText, QP.ButtonText):
+        p.setColor(QP.Disabled, role, QColor("#5A6270"))
+    return p

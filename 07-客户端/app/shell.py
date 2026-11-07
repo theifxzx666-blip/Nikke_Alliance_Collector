@@ -192,6 +192,12 @@ class Shell(QWidget):
         self._flash_timer.timeout.connect(self._flash_step)
         self._flash_alpha = 0.0
         self._hot = Hotkeys()
+        # 全局热键的作用域（v1.24）：只有游戏或本工具在前台时才注册，
+        # 否则 RegisterHotKey 会独占按键，在浏览器里按 F3/F4 也会触发采集。
+        self._hot_scope = None
+        self._scope_timer = QTimer(self)
+        self._scope_timer.setInterval(300)
+        self._scope_timer.timeout.connect(self._refresh_hot_scope)
 
         self.setWindowTitle("联盟采集 · 嗷润吉-1E-6 制作")
         _ico = Path(__file__).resolve().parent.parent / "assets" / "aorunji.ico"
@@ -757,6 +763,9 @@ class Shell(QWidget):
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        # viewport 默认 autoFillBackground=True，会填系统 Base 色（Win10 浅色 = 白）。
+        # 这里必须有真底色：整片半透明白压在白底上等于白屏（v1.23）。
+        scroll.viewport().setAutoFillBackground(False)
         inner = QWidget()
         body = QVBoxLayout(inner)
         body.setContentsMargins(0, 2, 4, 0)
@@ -818,6 +827,8 @@ class Shell(QWidget):
         sec = self._add_section(body, "keys", "快捷键",
                                 f"{len(KEYS.ORDER)} 个动作可改", False)
         self.opt_hot = self._switch(bool(self.cfg.get("hotkeys", True)))
+        self.opt_hot.setToolTip("只在游戏窗口或本客户端处于前台时生效 ——\n"
+                                "切到浏览器等其它程序会自动让出按键，不会误触发")
         self.opt_hot.toggled.connect(self._on_hot_toggled)
         self._row_setting(sec.lay, "全局热键", self.opt_hot)
 
@@ -936,18 +947,18 @@ class Shell(QWidget):
         h.setSpacing(6)
         cur = str(S.default_dir())          # v1.18：这里是「数据根」，不是某一类子目录
         self.dir_edit = QLineEdit(cur)
-        self.dir_edit.setFixedWidth(226)    # 窄了只看得到路径尾巴，看不出在哪块盘
+        self.dir_edit.setFixedWidth(220)    # 窄了只看得到路径尾巴，看不出在哪块盘
         self.dir_edit.setCursorPosition(0)  # 失焦时显示开头（盘符）而不是末尾
         self.dir_edit.setToolTip(cur)
         self.dir_edit.editingFinished.connect(self._on_dir_edited)
         h.addWidget(self.dir_edit)
         op = QPushButton("打开")
-        op.setFixedWidth(48)
+        op.setFixedWidth(52)                # 48 时两个字贴边，体检报"宽 < 需要"
         op.setToolTip("在资源管理器里打开数据目录")
         op.clicked.connect(lambda: self._open_dir("root"))
         h.addWidget(op)
         more = QPushButton("…")
-        more.setFixedWidth(34)
+        more.setFixedWidth(38)
         more.setToolTip("选择目录")
         more.clicked.connect(self._pick_dir)
         h.addWidget(more)
@@ -990,8 +1001,11 @@ class Shell(QWidget):
             if bad:
                 self.say(f"⚠ 全局热键被占用：{'/'.join(bad)} —— 退到窗口内（需先点一下客户端）。"
                          f"若任务管理器里有多个「NIKKE联盟采集」，关掉多余的再开", "WARN")
+            if not self._scope_timer.isActive():
+                self._scope_timer.start()     # 开始盯着前台窗口
         else:
             bad = [k for k, _ in global_binds]
+            self._scope_timer.stop()
         table = dict(global_binds)
         self._bind_map = dict(global_binds)      # 供自检查询"某个键到底绑了谁"
         for name in bad:
@@ -1002,6 +1016,32 @@ class Shell(QWidget):
             sc.setContext(Qt.WindowShortcut)
             sc.activated.connect(fn)
             self._local_keys[key] = sc
+
+    def _refresh_hot_scope(self):
+        """每 300 ms 判一次前台：只有游戏 / 本工具在用时才占用全局热键。
+
+        为什么要判：`RegisterHotKey` 是**独占**的 —— 注册期间浏览器、聊天框里按
+        F3/F4 收不到，而且照样触发本工具的采集。用户的要求是"只在游戏的客户端和
+        工具的客户端内响应"，所以离开范围就注销，把按键还给系统。
+
+        300 ms 的延迟换来的是「点一下游戏就能按」——比固定只在窗口内响应好得多，
+        比永久全局占用干净。
+        """
+        try:
+            win = getattr(getattr(self, "engine", None), "win", None)
+            ok = W.in_scope(getattr(win, "hwnd", 0) if win is not None else 0)
+        except Exception:
+            ok = True                       # 判断失败就别把功能关死
+        if ok == self._hot_scope:
+            return
+        self._hot_scope = ok
+        bad = self._hot.set_scope(ok)
+        if not ok:
+            A.log("hotkey", "前台不是游戏/本工具 → 注销全局热键，按键还给系统")
+            return
+        A.log("hotkey", f"回到作用域 → 重新注册：{'/'.join(self._hot.names())}")
+        if bad:
+            self.say(f"⚠ 热键重新注册失败：{'/'.join(bad)}（多半被别的程序抢了）", "WARN")
 
     def _rebuild_shortcuts(self):
         """拆掉旧快捷键重建。切换「全局热键」开关时两条路必须有且只有一条生效。"""
@@ -1122,11 +1162,14 @@ class Shell(QWidget):
         self._stop_current()
 
     def _stop_current(self):
-        """Esc / 主按钮的停止：按页签分派给伤害引擎或名单引擎。"""
+        """Esc / 主按钮的停止：按页签分派给伤害引擎或名单引擎。
+
+        文案交给各自引擎说 —— 名单可能在导航、也可能在滚采，两种情况的话不一样；
+        在外面再补一句只会撞车。
+        """
         if self._mode != 1:
             if self._bridge is not None:
                 self._bridge.stop_capture()
-                self.say("已请求停止名单采集")
             return
         self.engine.stop()
         self.say("已请求停止，等当前这步做完")
@@ -1394,9 +1437,12 @@ class Shell(QWidget):
         if people and not getattr(self._bridge, "_continuous", False):
             # 覆盖提示：不拦，但必须让人知道这次会重写这套库
             self.toast(f"「{BK.active_roster()}」已有 {people} 人，本次采集会覆盖原有名单")
-        if self._bridge._busy:
+        if (getattr(self._bridge, "_continuous", False)
+                or getattr(self._bridge, "_nav_running", False)):
+            # ⚠ 不能判 `_busy`：那是旧工具 `toggle_auto` 里的旗标，客户端走 headless
+            # 路径（直接调 `_begin_auto`），`_busy` 永远是 False —— 判它等于
+            # 采集途中再点主按钮还是"开始"，什么都不会发生。
             self._bridge.stop_capture()
-            self.say("已请求停止名单采集")
             return
         self.say("启动名单引擎（首次要预热识别模型，稍等两三秒）…")
         if not self._bridge.start_capture():
@@ -1443,17 +1489,24 @@ class Shell(QWidget):
         self.btn_export.setEnabled(bool(cur) or (not hard and self._lib_people() > 0))
         if hasattr(self, "btn_del"):
             self.btn_del.setEnabled(bool(self._rows_roster) and not run)
-        # Esc 只在运行中才监听：平时按 Esc 不该有任何动静
+        # Esc 只在运行中才监听：平时按 Esc 不该有任何动静。
+        # 「运行中」必须包含**导航阶段** —— 那十几秒里界面看着是空闲的，
+        # 但它正在自动点页面；不监听就等于按了停止没反应（v1.23 真机）。
         esc = getattr(self, "_esc", None)
         if esc is not None:
-            esc.set_active(bool(run) or bool(getattr(self._bridge, "_continuous", False)))
+            esc.set_active(bool(run)
+                           or bool(getattr(self._bridge, "_nav_running", False))
+                           or bool(getattr(self._bridge, "_continuous", False)))
         if was and not run and self._mode == 0:
-            # 名单收工：先刷新库（下拉人数 + 表格 + 副标题），再说存到哪
+            # 名单收工：先刷新库（下拉人数 + 表格 + 副标题），再说存到哪。
+            # 一行都没采到（导航被取消 / 开跑前校验没过）就别说"已存入"，
+            # 那句话在空库上看着像采集成功了。
             self._reload_books()
             self._load_roster_table()
-            n = self._lib_people()
-            self.say(f"名单已存入「{BK.active_roster() or '默认'}」（现在 {n} 人）· "
-                     f"要按盟分开存：成员库「管理…」→ 另存当前", "INFO")
+            if self._rows_roster:
+                n = self._lib_people()
+                self.say(f"名单已存入「{BK.active_roster() or '默认'}」（现在 {n} 人）· "
+                         f"要按盟分开存：成员库「管理…」→ 另存当前", "INFO")
 
     # ---------------- 通联状态机（v1.9）
     def _refresh_link(self):
@@ -2291,18 +2344,44 @@ class Shell(QWidget):
             self.say(f"打不开目录：{e}", "WARN")
 
     def _open_dir_row(self):
-        """「日志与诊断」这一行：两个直达按钮。"""
+        """「日志与诊断」这一行：开日志目录 + 导出诊断包。"""
         box = QWidget()
         h = QHBoxLayout(box)
         h.setContentsMargins(0, 0, 0, 0)
         h.setSpacing(6)
-        for text, kind, tip in (("打开日志", P.LOG, "在资源管理器里打开 日志/"),
-                                ("打开诊断", P.DIAG, "在资源管理器里打开 诊断/")):
-            b = QPushButton(text)
-            b.setToolTip(tip)
-            b.clicked.connect(lambda _=False, k=kind: self._open_dir(k))
-            h.addWidget(b)
+        b = QPushButton("打开日志")
+        b.setProperty("role", "sub")
+        b.setToolTip("在资源管理器里打开 日志/")
+        b.clicked.connect(lambda _=False: self._open_dir(P.LOG))
+        h.addWidget(b)
+
+        b = QPushButton("导出诊断包")
+        b.setProperty("role", "sub")
+        b.setToolTip("环境信息 + 运行日志打成一个 zip；不含用户名、计算机名、"
+                     "IP 与截图，发出去前可以自己解压看")
+        b.clicked.connect(self.export_diag)
+        h.addWidget(b)
         return box
+
+    def export_diag(self):
+        """导出一个 zip 给作者排查（v1.23）。
+
+        失败不弹模态框：设置页的操作被打断很难受，日志里记了 traceback。
+        """
+        try:
+            from . import diag as D
+            out = D.export()
+        except Exception as exc:
+            A.log_exc("diag", exc)
+            self.say(f"导出诊断包失败：{exc}", "WARN")
+            self.toast("导出失败，详见日志")
+            return
+        self.say(f"诊断包已生成：{out.name}")
+        self.toast("诊断包已生成")
+        try:
+            subprocess.Popen(["explorer", "/select,", str(out)])
+        except Exception:
+            pass
 
     def _on_dir_edited(self):
         """数据目录：只存根，五类子目录由 paths 自动建（v1.18）。"""

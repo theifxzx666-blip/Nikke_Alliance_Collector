@@ -16,6 +16,13 @@
    绑定 hwnd 的注册会在那一刻失效，而且失败得毫无声响。线程级没有这个问题。
 2. **Esc 永远不注册**：全局劫持 Esc 会让游戏里的 Esc 失灵，是灾难级副作用。
    Esc 只保留窗口内语义。
+
+v1.24 加了作用域（`set_scope`）
+------------------------------
+`RegisterHotKey` 是独占的：注册期间那个键在浏览器、聊天框里也收不到，还照样
+触发本工具的采集。用户的要求是"只在游戏的客户端和工具的客户端里响应"，
+所以由宿主每 300 ms 判一次前台窗口（`win.in_scope`），离开范围就注销、
+回来再注册 —— 既不误触，也不抢占别的程序。
 """
 from ctypes import wintypes
 
@@ -33,11 +40,12 @@ class Hotkeys(QAbstractNativeEventFilter):
 
     def __init__(self):
         super().__init__()
-        self._map = {}            # id -> (名字, 回调)
-        self._next = 1
+        self._binds = []          # [(键名, 回调)]，注册的"真源"，注销时才不会丢
+        self._map = {}            # id -> (键名, 回调)，只在注册期间有效
         self._ok = []
         self._bad = []
         self._installed = False
+        self._scope = True
 
     # ---------------- 对外 ----------------
     def install(self, binds):
@@ -47,32 +55,60 @@ class Hotkeys(QAbstractNativeEventFilter):
         不许静默 —— 用户按了没反应又查不到原因，就是这一轮被骂的那件事。
         """
         self.uninstall()
+        self._binds = [(n, f) for n, f in binds]
+        return self._register_all()
+
+    def uninstall(self):
+        self._unregister_all()
+        self._binds = []
+        self._ok.clear()
+        self._bad.clear()
+
+    def set_scope(self, on: bool):
+        """进入/离开作用域。返回这次切到"注册"时失败的键名。"""
+        on = bool(on)
+        if on == self._scope:
+            return []
+        self._scope = on
+        if not on:
+            self._unregister_all()
+            return []
+        _, bad = self._register_all()
+        return bad
+
+    def names(self):
+        return list(self._ok)
+
+    def scoped(self) -> bool:
+        return self._scope
+
+    # ---------------- 内部 ----------------
+    def _unregister_all(self):
+        for hid in list(self._map):
+            _unregister(hid)
+        self._map.clear()
+        self._ok.clear()          # names() 要反映"此刻真正占着"的键，不是历史
+
+    def _register_all(self):
+        self._ok.clear()
+        self._bad.clear()
+        self._map.clear()
+        if not self._binds or not self._scope:
+            return list(self._ok), list(self._bad)
         if not self._installed:
             QCoreApplication.instance().installNativeEventFilter(self)
             self._installed = True
-        for name, fn in binds:
+        for hid, (name, fn) in enumerate(self._binds, 1):
             vk = VK_F.get(name)
             if vk is None:
                 self._bad.append(name)
                 continue
-            hid = self._next
-            self._next += 1
             if _register(hid, vk):
                 self._map[hid] = (name, fn)
                 self._ok.append(name)
             else:
                 self._bad.append(name)
         return list(self._ok), list(self._bad)
-
-    def uninstall(self):
-        for hid in list(self._map):
-            _unregister(hid)
-        self._map.clear()
-        self._ok.clear()
-        self._bad.clear()
-
-    def names(self):
-        return list(self._ok)
 
     # ---------------- 消息 ----------------
     def nativeEventFilter(self, event_type, message):

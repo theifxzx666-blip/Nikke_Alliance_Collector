@@ -155,6 +155,44 @@ class RosterEngine(QObject, RosterMixin):
         except Exception as e:
             self.log_sig.emit(f"读标定失败（会用内置预设）：{e}", "WARN")
 
+    def _apply_builtin_preset(self) -> bool:
+        """套用随包的内置预设（`预设/昵称列预设.json`）。
+
+        这是「标定一次就够」的兑现点：预设存的是**相对比例**，只要有效画面还是
+        16:9，1280×720 上标的框在任何分辨率都成立。旧工具 `App._load_cfg` 有这个
+        回退，客户端 v1.0 起漏掉了 —— 于是内置预设永远用不上，用户每次都被要求
+        重新标定，还看到一句"把游戏窗口调成 16:9"的误导提示（v1.23 补）。
+
+        必须在 `self.win` 存在之后调用：换算要用当前窗口的高与宽高比。
+        """
+        try:
+            preset = A.load_preset()
+        except Exception as exc:
+            self.log_sig.emit(f"读内置预设失败：{exc}", "WARN")
+            return False
+        if not preset or not preset.get("region_rel"):
+            return False
+        try:
+            pa = float(preset.get("aspect") or 0.0)
+            wa = float(getattr(self.win, "aspect", 0) or 0)
+            if pa and wa and abs(pa - wa) / wa > A.ASPECT_TOL:
+                self.log_sig.emit(
+                    f"内置预设是在 {preset.get('resolution') or '16:9'} 上标的，"
+                    f"当前窗口宽高比 {wa:.3f} 对不上 —— 需要重新标定一次", "WARN")
+                return False
+            self.region_rel = tuple(preset["region_rel"])
+            self._calib_pitch = (float(preset.get("pitch_rel") or 0)
+                                 * self.win.h) or None
+            self._calib_rows = preset.get("rows") or None
+            self._preset_used = True
+            self.log_sig.emit(
+                f"已套用内置预设（{preset.get('resolution') or '16:9'} 上标的）"
+                f"· 每屏约 {self._calib_rows or '?'} 行，直接开采集即可", "INFO")
+            return True
+        except Exception as exc:
+            self.log_sig.emit(f"套用内置预设失败：{exc}", "WARN")
+            return False
+
     def attach(self) -> bool:
         """锁定游戏窗口（复用旧工具的判据：按进程名 + 有效画面）。"""
         try:
@@ -167,6 +205,7 @@ class RosterEngine(QObject, RosterMixin):
     def start_capture(self) -> bool:
         """开始：接窗口 → 导航到成员页 → 自动滚采。"""
         self._headless = True
+        self._cancelled = False           # 新的一轮：清掉上一轮的取消旗标
         if getattr(self, "_continuous", False):
             self.log_sig.emit("名单采集已经在跑", "WARN")
             return True
@@ -186,8 +225,12 @@ class RosterEngine(QObject, RosterMixin):
                               "WARN")
             return False
         if self.region_rel is None:
-            self.log_sig.emit("还没有采集区域 —— 把游戏窗口调成 16:9 标准尺寸后重试",
-                              "WARN")
+            # 接上窗口才算得出比例 —— 内置预设的回退必须放在这一步，不能放 prepare()
+            self._apply_builtin_preset()
+        if self.region_rel is None:
+            self.log_sig.emit(
+                "还没有采集区域 —— 点【标定昵称列】量一次"
+                "（内置预设只对 16:9 有效，其它宽高比必须量）", "WARN")
             return False
         if getattr(self, "_nav_running", False):
             self.log_sig.emit("导航正在跑，等它做完再开采集", "INFO")
@@ -210,6 +253,11 @@ class RosterEngine(QObject, RosterMixin):
         self._nav_timer.start()
 
     def _poll_nav(self):
+        # 用户按过停止：导航的取消旗标已经设了，别再自动接着开滚采
+        # （否则"按 Esc 停止"反而变成"开始采集"，页面继续动）
+        if getattr(self, "_cancelled", False):
+            self._nav_timer.stop()
+            return
         self._nav_tries += 1
         if getattr(self, "_nav_running", False):
             if self._nav_tries >= 200:            # 60 s
@@ -224,9 +272,37 @@ class RosterEngine(QObject, RosterMixin):
         except Exception as e:
             self.log_sig.emit(f"启动滚采失败：{e}", "ERR")
 
+    def _nav_done(self):
+        """导航收尾：立刻接着判一次，别等 300 ms 轮询。
+
+        中间那一下会让 heartbeat 播一次"不忙"，界面闪一下"名单已存入"，
+        看着像采集自己结束了一轮。
+        """
+        try:
+            super()._nav_done()
+        except Exception:
+            self._nav_running = False
+        self._poll_nav()
+
     def stop_capture(self):
-        if getattr(self, "_continuous", False):
+        """停止名单采集：**导航中与滚采中都算**。
+
+        v1.23 之前只处理 `_continuous`，导航阶段按停止等于没按 —— 而且导航一
+        结束 `_poll_nav` 还会自动开滚采，用户看到的是"按了停止反而开始动手了"。
+        """
+        self._cancelled = True
+        nav = bool(getattr(self, "_nav_running", False))
+        cont = bool(getattr(self, "_continuous", False))
+        if nav:
+            self._nav_cancel = True               # 导航线程里 5 处检查点会退出
+            self.log_sig.emit("正在取消导航…", "INFO")
+        tm = getattr(self, "_nav_timer", None)
+        if tm is not None and tm.isActive():
+            tm.stop()
+        if cont:
             self.cancel_auto()
+        elif not nav:
+            self.log_sig.emit("已停止 —— 当前没有采集在跑", "INFO")
 
     # ---------------- 数据出口
     def names_rows(self) -> list:
@@ -264,7 +340,10 @@ class RosterEngine(QObject, RosterMixin):
 
     # ---------------- 状态广播（QTimer 轮询，避免每处手工 emit）
     def heartbeat(self):
-        busy = bool(getattr(self, "_continuous", False))
+        # 导航也算"忙"：否则那 5~20 秒里界面是空闲态，Esc 监听不启用，
+        # 用户按停止没有任何反馈，导航跑完还自动开滚采（v1.23 真机）。
+        busy = bool(getattr(self, "_continuous", False)
+                    or getattr(self, "_nav_running", False))
         if busy != self._busy_reported:
             self._busy_reported = busy
             self.state_sig.emit(busy)

@@ -1,6 +1,7 @@
 # ---- 构建产物 ----
 dist/
 build/
+build_dev/
 *.pyz
 *.pyc
 __pycache__/

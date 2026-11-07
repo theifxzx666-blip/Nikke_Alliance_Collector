@@ -26,13 +26,13 @@ import re
 from datetime import datetime
 from pathlib import Path
 
+import appdir
+
 
 def _app_dir() -> Path:
-    """工具数据目录（与 alliance_ocr._app_dir 同语义，避免循环 import）。"""
-    import sys
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
-    return Path(__file__).resolve().parent
+    """工具数据目录。规则与 `alliance_ocr._app_dir` 同源（`appdir.py`），
+    不能各写一份 —— 两份一旦漂移，预设和库就分家了。"""
+    return appdir.app_dir()
 
 
 APP_DIR = _app_dir()

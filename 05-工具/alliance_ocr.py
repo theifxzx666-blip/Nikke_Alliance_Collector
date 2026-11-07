@@ -53,21 +53,26 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from PIL import Image, ImageTk
 
-def _app_dir() -> Path:
-    """工具的数据目录（输出/、预设/、日志都挂在这里）。
+import appdir
 
-    打包成单文件 exe 之后 `__file__` 指向 PyInstaller 解包出来的临时目录
-    （`_MEIPASS`），那里每次启动都是新的、退出就删——昵称库、区域配置、导出
-    的 CSV 全都会跟着消失。所以冻结态必须改用 exe 自己所在的目录。
+def _app_dir() -> Path:
+    """程序数据目录（`预设/`、`输出/`、日志都挂在这里）。
+
+    冻结态**不再**用 exe 所在目录：单文件版每次启动都在 exe 同级解压，
+    再把预设和许可撒在那里 —— 从桌面双击一次，桌面就多三个东西；
+    装在 Program Files 时更是直接写不进去。具体规则见 `appdir.py`。
+
+    源码态仍是本文件目录，开发时改预设、看输出都在熟悉的位置。
     """
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
-    return Path(__file__).resolve().parent
+    return appdir.app_dir()
 
 
 APP_DIR = _app_dir()
 OUT_DIR = APP_DIR / "输出"
-OUT_DIR.mkdir(exist_ok=True)
+try:
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+except Exception:
+    pass                                  # 目录不可写不该拦启动，后面真写时再报
 CFG = OUT_DIR / "区域.json"
 # 标定结果一旦确认就固化成「预设」，放在工具目录里跟着走。
 # 之后只要有效画面是 16:9，任何分辨率都按比例换算套用，不需要再标定。
@@ -216,8 +221,11 @@ def log_exc(tag: str, exc: BaseException | None = None) -> None:
     _echo(tb)
 
 
-def log_start() -> None:
-    """启动分隔头 + 环境快照。"""
+def log_start(extra: str = "") -> None:
+    """启动分隔头 + 环境快照。
+
+    `extra` 给宿主前端补一句自己的版本（客户端是 PySide6，旧工具不需要）。
+    """
     _rotate_log()
     vers = []
     for pkg in ("rapidocr", "onnxruntime", "mss", "Pillow", "numpy"):
@@ -244,10 +252,16 @@ def log_start() -> None:
     except Exception:
         dpi_txt = ""
     log("start", "-" * 72)
-    log("start", f"启动 · Python {sys.version.split()[0]} · Tk {tk.TkVersion} · "
+    try:
+        tkv = f" · Tk {tk.TkVersion}"
+    except Exception:                 # 裁掉 tkinter 的发行包里也得能写日志
+        tkv = ""
+    log("start", f"启动 · Python {sys.version.split()[0]}{tkv} · "
                  f"屏幕 {scr[0]}x{scr[1]}{dpi_txt}")
     log("start", f"PID={os.getpid()} 提权={self_elevated()} 目录={APP_DIR}")
     log("start", " · ".join(vers))
+    if extra:
+        log("start", extra)
     log("start", "-" * 72)
 
 
@@ -6576,28 +6590,46 @@ class App(tk.Tk, RosterMixin):
 
 
 def _seed_presets() -> None:
-    """首次运行时把包里的预设文件播种到 exe 旁边。
+    """首次运行时把包里的预设文件播种到**程序数据目录**。
 
-    为什么要这一步：`_app_dir()` 在冻结态读的是 **exe 所在目录**，而随包带进来的
-    预设全在 `_MEIPASS` 那个每次启动都会重建的临时目录里——不搬出来，exe 就永远
-    认不到内置的标定结果，用户还得自己重新标一次。
+    为什么要这一步：`APP_DIR` 在冻结态是用户数据目录（`%APPDATA%\\OrangeHelper`，
+    见 `appdir.py`），而随包带进来的预设全在 `_MEIPASS` 那个每次启动都会重建的
+    临时目录里——不搬出来，exe 就永远认不到内置的标定结果，用户还得自己重新标一次。
 
     只播种**缺失**的文件，绝不覆盖：用户自己标过的结果比内置先验更准。
     昵称库不在包里（那是用户数据），所以不会被播种，第一次跑就是空库。
+
+    v1.22 起递归播种：`成员库/`、`BOSS库/` 也在包里，只拷顶层 *.json 会让
+    内置的二十六套 BOSS 名单在单文件版里消失（`_MEIPASS` 是临时目录）。
 
     失败一律忽略：预设拷不过去顶多让用户多点一次【标定昵称列】，不该拦启动。
     """
     if not getattr(sys, "frozen", False):
         return
-    src = Path(getattr(sys, "_MEIPASS", "")) / "预设"
+    meipass = Path(getattr(sys, "_MEIPASS", ""))
+
+    # 许可声明也一起搬出去：单文件发行版只有一个 exe，用户没地方看条款
+    notice = meipass / "NOTICE.txt"
+    if notice.is_file() and not (APP_DIR / "NOTICE.txt").exists():
+        try:
+            shutil.copy2(notice, APP_DIR / "NOTICE.txt")
+        except Exception:
+            pass
+
+    src = meipass / "预设"
     if not src.is_dir():
         return
     dst = APP_DIR / "预设"
     try:
         dst.mkdir(exist_ok=True)
-        for f in src.glob("*.json"):
-            if not (dst / f.name).exists():
-                shutil.copy2(f, dst / f.name)
+        for f in src.rglob("*"):
+            if not f.is_file():
+                continue
+            target = dst / f.relative_to(src)
+            if target.exists():
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(f, target)
     except Exception:
         pass
 

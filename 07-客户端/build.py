@@ -1,16 +1,18 @@
 # -*- coding: utf-8 -*-
-"""正式客户端打包：PyInstaller(onedir) → 裁白带运行时 → 铺预设 → 跑一次自检。
+"""正式客户端打包。
 
-为什么不 --onefile：单文件每次启动都要解压 300MB，而且之前踩过"窗口继承启动状态
-不显示"的坑；onedir 启动快、排障也直观。
+    python build.py              # 单文件 exe（发行用，发出去只有一个文件）
+    python build.py --onedir     # 目录版（开发调试用，启动快、免解压）
 
-为什么打包后还要裁：cv2 的 ffmpeg 解码器（约 30M）和 Qt Quick/Qml（约 20M）
-我们一个都不用，删掉后**必须再跑一次 exe 验证**，不能只删了事。
+两种形态共用 `NIKKE联盟采集.spec`，靠环境变量 `NIKKE_ONEFILE` 切换。
+裁剪（ffmpeg 解码器 / Qt Quick）已经写进 spec 的清单过滤里 —— 单文件形态
+打完只剩一个 exe，外面没东西可删。
 
 用法：
     D:\\Codex\\依赖\\venv-client\\Scripts\\python.exe build.py
 """
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -19,16 +21,19 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 NAME = "NIKKE联盟采集"
-DIST = HERE / "dist" / NAME
-ENGINE = HERE.parents[0] / "05-工具"          # 判据与预设都在这里
 
-TRIM_GLOBS = [
-    "_internal/cv2/opencv_videoio_ffmpeg*.dll",   # 视频解码，纯图像处理用不到
-    "_internal/PySide6/Qt6Quick*.dll",
-    "_internal/PySide6/Qt6Qml*.dll",
-    "_internal/PySide6/qml",
-    "_internal/PySide6/translations",             # Qt 自带翻译，界面文案都是我们自己的
-]
+# %APPDATA% 下的目录名：从 appdir 取，不在这里抄第二份（抄了必然漂移）
+sys.path.insert(0, str(HERE.parent / "05-工具"))
+try:
+    from appdir import APP_NAME as APP_FOLDER
+except Exception:                      # 只在 05-工具 缺失时兜底
+    APP_FOLDER = "OrangeHelper"
+SPEC = HERE / f"{NAME}.spec"
+DIST_DIR = HERE / "dist"
+DIST = DIST_DIR / NAME                      # 目录版产物目录
+EXE = DIST_DIR / f"{NAME}.exe"              # 单文件产物
+
+ONEFILE = "--onedir" not in sys.argv
 
 # 发行版数据源：`发布预设/` 是**唯一**来源，与开发机上的用户数据（05-工具/预设）
 # 彻底隔离。开发目录里有真实联盟名单，直接打包会泄漏给使用者。
@@ -40,6 +45,8 @@ PRESET_FILES = ("库索引.json",)
 
 
 def size_mb(p: Path) -> float:
+    if p.is_file():
+        return p.stat().st_size / 1024 / 1024
     total = 0
     for f in p.rglob("*"):
         if f.is_file():
@@ -48,50 +55,32 @@ def size_mb(p: Path) -> float:
 
 
 def build():
+    env = dict(os.environ)
+    env["NIKKE_ONEFILE"] = "1" if ONEFILE else "0"
     cmd = [
         str(Path(sys.executable).with_name("pyinstaller.exe")),
-        "--noconfirm", "--clean", "--windowed", "--onedir", "--name", NAME,
-        # 采集要往游戏窗口注入鼠标、窗口控制要改它的位置，都必须与游戏同级权限。
-        # 内嵌 manifest 让双击 exe 就弹 UAC，而不是跑起来才发现拖不动。
-        "--uac-admin",
-        "--collect-all", "rapidocr", "--collect-all", "onnxruntime",
-        "--paths", str(ENGINE),
-        "--add-data", f"{RELEASE};预设",
-        # v1.6 品牌素材：图标 + 两张收款码（随包分发，不联网）
-        "--add-data", f"{HERE / 'assets'};assets",
-        "--icon", str(HERE / "assets" / "aorunji.ico"),
-        "app/main.py",
+        "--noconfirm", "--clean",
+        "--distpath", str(DIST_DIR),
+        "--workpath", str(HERE / "build"),
+        str(SPEC),
     ]
-    print("打包中…（约 90~150 s）")
+    print(f"打包中（{'单文件' if ONEFILE else '目录版'}）… 约 90~200 s")
     t0 = time.time()
     r = subprocess.run(cmd, cwd=str(HERE), capture_output=True, text=True,
-                       encoding="utf-8", errors="replace")
+                       encoding="utf-8", errors="replace", env=env)
     if r.returncode != 0:
-        print(r.stdout[-2500:])
-        print(r.stderr[-2500:])
+        print(r.stdout[-3000:])
+        print(r.stderr[-3000:])
         raise SystemExit(f"PyInstaller 失败，退出码 {r.returncode}")
-    print(f"打包完成 {time.time() - t0:.0f}s · {size_mb(DIST):.0f} MB")
-
-
-def trim():
-    removed = 0.0
-    for pat in TRIM_GLOBS:
-        for f in DIST.glob(pat):
-            if f.is_dir():
-                removed += sum(x.stat().st_size for x in f.rglob("*") if x.is_file()) / 1024 / 1024
-                shutil.rmtree(f, ignore_errors=True)
-            else:
-                removed += f.stat().st_size / 1024 / 1024
-                f.unlink(missing_ok=True)
-    print(f"裁剪 {removed:.0f} MB → 现在 {size_mb(DIST):.0f} MB")
+    out = EXE if ONEFILE else DIST
+    print(f"打包完成 {time.time() - t0:.0f}s · {size_mb(out):.0f} MB")
 
 
 def copy_presets():
-    """把发行版预设铺到 exe 同级。
+    """目录版：把发行预设铺到 exe 同级。
 
-    冻结后 `APP_DIR` 就是 exe 所在目录，客户端只读这里的 `预设/`。
-    来源固定为 `发布预设/`：即使开发机上的 `05-工具/预设` 里存着真实联盟名单，
-    也不会被打进发行包。
+    单文件版不用这一步 —— 预设已经在 exe 里，`_seed_presets()` 首次运行会把
+    缺失的文件写到 exe 旁边（用户数据必须落在 exe 旁边，不能留在临时目录）。
     """
     dst = DIST / "预设"
     dst.mkdir(parents=True, exist_ok=True)
@@ -154,76 +143,133 @@ def check_release_presets():
     print("发行预设检查通过：无成员数据")
 
 
-_SIDE_ALIAS = {"游戏右侧": "右侧", "游戏左侧": "左侧", "覆盖右下": "自动"}
+def _selftest(exe: Path, cwd: Path, min_presets: int, marker: bytes = b"",
+              env: dict | None = None) -> bool:
+    """跑一次 `--shot`：出图 + 退出码 0，才能说明 Qt/OCR 都打包进去了。
 
+    `marker` 给单文件版用：外面没有 `预设/` 可数，只能在 exe 字节里确认
+    随包文件确实进去了（否则打出来的是个能启动但没预设的空壳）。
+    `env` 用来把 `APPDATA` 指到临时目录 —— 单文件版把数据放在用户目录，
+    不隔离的话自检会往真实 `%APPDATA%` 里写东西。
 
-def _migrate_settings(src: Path, dst: Path) -> None:
-    try:
-        cfg = json.loads(src.read_text(encoding="utf-8"))
-        if not isinstance(cfg, dict):
-            cfg = {}
-    except Exception:
-        cfg = {}
-    side = str(cfg.get("snap_side") or "右侧")
-    cfg["snap_side"] = _SIDE_ALIAS.get(side, side)
-    if cfg["snap_side"] not in ("右侧", "左侧", "自动", "不动"):
-        cfg["snap_side"] = "右侧"
-    if cfg["snap_side"] == "不动":
-        cfg["snap_side"] = "右侧"          # 用户这轮明确要"跟着游戏走"
-    cfg.pop("win_w", None)
-    cfg.pop("win_h", None)
-    dst.write_text(json.dumps(cfg, ensure_ascii=False, indent=1), encoding="utf-8")
-
-
-def verify():
-    """跑一次自检：exe --shot 出图 + 退出码 0，才能说明 Qt/OCR 都打包进去了。
-
-    exe 内嵌了 requireAdministrator 清单（采集需要与游戏同级权限），
-    所以**普通权限下根本起不来**（WinError 740）。这时退化为静态校验：
-    清单在不在、预设铺没铺、体积对不对 —— 动态自检留给管理员环境。
+    返回 True 表示**真的跑起来了**（False = 退化成静态校验）。
     """
-    exe = DIST / f"{NAME}.exe"
     out = HERE / "dist" / "_selftest.png"
     out.unlink(missing_ok=True)
     print("自检：运行 exe --shot …")
+    t0 = time.time()
+    run_env = dict(os.environ)
+    if env:
+        run_env.update(env)
     try:
         r = subprocess.run([str(exe), "--shot", str(out)],
-                           cwd=str(DIST), capture_output=True, text=True,
-                           encoding="utf-8", errors="replace", timeout=180)
+                           cwd=str(cwd), capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=300,
+                           env=run_env)
     except OSError as e:
         if getattr(e, "winerror", None) != 740:
             raise
         print("exe 需要管理员权限（清单生效）—— 改用静态校验")
         raw = exe.read_bytes()
         has_admin = b"requireAdministrator" in raw
-        presets = sorted(x.name for x in (DIST / "预设").glob("*.json"))
-        size = size_mb(DIST)
+        presets = sorted(x.name for x in (cwd / "预设").glob("*.json"))
         print(f"清单 requireAdministrator：{'有' if has_admin else '缺'}")
-        print(f"预设 {len(presets)} 个：{'、'.join(presets) or '无'}")
-        print(f"体积 {size:.0f} MB")
-        if not has_admin or len(presets) < 3 or size < 200:
+        if min_presets:
+            print(f"预设 {len(presets)} 个：{'、'.join(presets) or '无'}")
+        # 单文件版外面没有 预设/ 可数，改成在 exe 字节里找随包文件的文件名
+        embedded = (marker in raw) if marker else True
+        if marker:
+            print(f"内嵌预设标记 {'库索引.json'}：{'有' if embedded else '缺'}")
+        print(f"体积 {size_mb(exe):.0f} MB")
+        # 136 MB 是单文件的实际体积（PyInstaller 的 CArchive 带压缩）；
+        # 目录版解压后约 310 MB。低于 100 基本就是打漏了。
+        bad = not has_admin or not embedded or size_mb(exe) < 100
+        if min_presets and len(presets) < min_presets:
+            bad = True
+        if bad:
             raise SystemExit("静态校验未通过")
         print("静态校验通过（动态自检请在管理员终端里重跑 build.py）")
-        return
+        return False
 
     ok = out.exists() and out.stat().st_size > 5000
     print(f"退出码 {r.returncode} · 出图 {'有' if ok else '无'} "
-          f"({out.stat().st_size // 1024 if out.exists() else 0} KB)")
+          f"({out.stat().st_size // 1024 if out.exists() else 0} KB) · "
+          f"耗时 {time.time() - t0:.1f}s")
     if not ok:
         print(r.stdout[-1500:])
         print(r.stderr[-1500:])
         raise SystemExit("自检失败：exe 没有正常出图")
     print("自检通过")
+    return True
+
+
+def verify():
+    """目录版：直接跑产物目录里的 exe。"""
+    _selftest(DIST / f"{NAME}.exe", DIST, 3)
+
+
+def verify_onefile():
+    """单文件版：在**空目录**里跑，确认两件事。
+
+    1. 预设与许可播到了 `%APPDATA%\\OrangeHelper`，不是撒在 exe 旁边；
+    2. exe 所在目录跑完之后**仍然只有 exe 一个文件**。
+
+    不能直接在 dist/ 里跑 —— 那里已经有一份 exe 和 `预设/`，播种走没走通
+    就看不出来了。`APPDATA` 指到临时目录，避免污染真实的用户目录。
+    """
+    tmp = DIST_DIR / "_onefile_test"
+    if tmp.exists():
+        shutil.rmtree(tmp, ignore_errors=True)
+    run_dir = tmp / "exe"
+    data_dir = tmp / "appdata"
+    run_dir.mkdir(parents=True)
+    data_dir.mkdir()
+    exe = run_dir / f"{NAME}.exe"
+    shutil.copy2(EXE, exe)
+    try:
+        ran = _selftest(exe, run_dir, 0, marker="库索引.json".encode("utf-8"),
+                        env={"APPDATA": str(data_dir)})
+        if not ran:
+            print("（未提权，动态播种检查跳过；预设已按内嵌标记确认在包里）")
+            return
+        appdata = data_dir / APP_FOLDER
+        seeded = sorted(x.name for x in (appdata / "预设").rglob("*") if x.is_file())
+        print(f"首次运行播种 {len(seeded)} 个文件："
+              f"{'、'.join(seeded[:6])}{' …' if len(seeded) > 6 else ''}")
+        # 发布预设是 32 个（4 个顶层 json + 库索引 + 26 套 BOSS + 示例成员库）
+        if len(seeded) < 30:
+            raise SystemExit(f"播种不完整：只有 {len(seeded)} 个，应有 32 个")
+        if not (appdata / "NOTICE.txt").exists():
+            raise SystemExit("许可声明没有播到用户数据目录")
+        left = sorted(p.name for p in run_dir.iterdir() if p.name != exe.name)
+        if left:
+            raise SystemExit(f"exe 旁边不该有东西，实际多了：{'、'.join(left)}")
+        print(f"数据落在 {appdata}")
+        print("exe 所在目录跑完仍然只有它自己")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def main():
     check_release_presets()
+    if ONEFILE:
+        try:
+            EXE.unlink(missing_ok=True)
+        except PermissionError:
+            # Windows 上运行中的 exe 不能被删除或覆盖，报 WinError 5
+            raise SystemExit(f"{EXE.name} 正在运行 —— 先关掉客户端再打包")
+        if DIST.exists():
+            shutil.rmtree(DIST, ignore_errors=True)   # 别让旧目录版混在一起
     build()
-    trim()
-    copy_presets()
-    verify()
-    print(f"\n产物：{DIST}")
-    print(f"体积：{size_mb(DIST):.0f} MB")
+    if ONEFILE:
+        verify_onefile()
+        print(f"\n产物：{EXE}")
+        print(f"体积：{size_mb(EXE):.0f} MB（单文件，发给别人只发这一个）")
+    else:
+        copy_presets()
+        verify()
+        print(f"\n产物：{DIST}")
+        print(f"体积：{size_mb(DIST):.0f} MB")
 
 
 if __name__ == "__main__":

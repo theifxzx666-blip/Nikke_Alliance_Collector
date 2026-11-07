@@ -17,7 +17,8 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 from PySide6.QtCore import QPoint, Qt                      # noqa: E402
-from PySide6.QtWidgets import QApplication, QFrame, QLabel  # noqa: E402
+from PySide6.QtWidgets import (QApplication, QFrame, QLabel,  # noqa: E402
+                               QPushButton)
 
 import app.store as S                                      # noqa: E402
 from app import shell as SH                                # noqa: E402
@@ -749,6 +750,168 @@ def main():
     finally:
         if _real_start is not None:
             _os.startfile = _real_start
+
+    # ---------------- 5o. v1.23：诊断包（环境 + 日志，脱敏后打包）
+    from app import diag as D
+    _btn_texts2 = [b.text() for b in w.drawer.findChildren(QPushButton)]
+    check("设置抽屉里有「导出诊断包」", "导出诊断包" in _btn_texts2, str(_btn_texts2))
+    check("路径里的用户名被换掉",
+          bool(_os.environ.get("USERNAME"))
+          and _os.environ["USERNAME"] not in D.mask(str(Path.home())),
+          D.mask(str(Path.home())))
+    _keep_root = P.root()
+    _old_log = SH.A.LOG_PATH
+    S.save_settings(data_dir=str(tmp / "数据"))     # 诊断包落在临时根里
+    SH.A.LOG_PATH = tmp / "操作日志.txt"
+    SH.A.LOG_PATH.write_text("00:00:00.000 [I] test: 一行日志\n", encoding="utf-8")
+    try:
+        _zp = D.export()
+        import zipfile as _zf
+        with _zf.ZipFile(_zp) as _z:
+            _names = set(_z.namelist())
+            _txt = _z.read("操作日志.txt").decode("utf-8")
+        check("诊断包四个文件齐全",
+              {"环境.txt", "操作日志.txt", "配置.json", "说明.txt"} <= _names,
+              str(sorted(_names)))
+        check("诊断包里带上了日志内容", "一行日志" in _txt, _txt[:60])
+        check("诊断包里没有多余的截图/名单",
+              not any(n.endswith((".png", ".csv")) for n in _names), str(sorted(_names)))
+    finally:
+        SH.A.LOG_PATH = _old_log
+        S.save_settings(data_dir=str(_keep_root))
+    check("诊断包文件名精确到秒", len(_zp.stem.split("_")[-1]) == 6, _zp.name)
+
+    # ---------------- 5p. v1.23：Win10 浅色主题下不能白屏
+    # 整片配色是 rgba(255,255,255,N) 叠在深色底上，一旦哪个容器吃了系统 Base（白）
+    # 就变成白板 + 浅灰字。palette 与 viewport 是两道闸。
+    from PySide6.QtGui import QPalette
+    from PySide6.QtWidgets import QScrollArea
+    _pal = T.dark_palette()
+    check("调色板 Base 是深色",
+          _pal.color(QPalette.Base).lightness() < 60,
+          _pal.color(QPalette.Base).name())
+    check("调色板 Window 与抽屉底色同源",
+          _pal.color(QPalette.Window).name().lower() == "#14171c",
+          _pal.color(QPalette.Window).name())
+    _sa = w.drawer.findChild(QScrollArea)
+    check("设置滚动区关掉 autoFillBackground",
+          _sa is not None and not _sa.viewport().autoFillBackground(), "")
+    check("设置滚动区在 QSS 里是透明的",
+          "QScrollArea > QWidget > QWidget" in T.qss(), "")
+
+    # ---------------- 5q. v1.23：内置预设回退
+    # 客户端 v1.0 起漏了旧工具 `_load_cfg` 的第二级回退，内置预设永远用不上，
+    # 用户每次开名单采集都被要求重新标定（真机 20:25 报「还没有采集区域」）。
+    import json as _json
+    _old_preset = SH.A.PRESET
+    SH.A.PRESET = tmp / "昵称列预设.json"
+    SH.A.PRESET.write_text(_json.dumps({
+        "region_rel": [0.21, 0.30, 0.79, 0.86], "pitch_rel": 0.102,
+        "rows_per_screen": 7, "aspect": 16 / 9,
+        "resolution": "1220x686", "saved_at": "2026-11-07 12:00",
+    }, ensure_ascii=False), encoding="utf-8")
+
+    class _Win:
+        def __init__(self, aspect, h):
+            self.aspect, self.h, self.w = aspect, h, int(h * aspect)
+
+    try:
+        _e = SH.RosterEngine()
+        _e.win = _Win(16 / 9, 778)
+        check("16:9 能吃内置预设", _e._apply_builtin_preset(), "")
+        check("预设区域按比例搬过来",
+              _e.region_rel == (0.21, 0.30, 0.79, 0.86), str(_e.region_rel))
+        check("行距按窗口高换算", abs((_e._calib_pitch or 0) - 0.102 * 778) < 0.5,
+              str(_e._calib_pitch))
+        _e2 = SH.RosterEngine()
+        _e2.win = _Win(4 / 3, 600)
+        check("非 16:9 明确拒绝（不再假装能采）",
+              not _e2._apply_builtin_preset() and _e2.region_rel is None, "")
+    finally:
+        SH.A.PRESET = _old_preset
+
+    # ---------------- 5r. v1.23：Esc 在导航阶段也要停得住
+    # 真机：按 ESC 之后页面还在自动点/滚 —— 因为导航阶段不在监听范围，
+    # 而且导航一结束 `_poll_nav` 还会自动开滚采。
+    _e3 = SH.RosterEngine()
+    _e3._nav_running = True
+    _e3._nav_cancel = False
+    _e3._continuous = False
+    _e3._await_nav()
+    _e3.stop_capture()
+    check("导航中按停止：取消旗标置位", _e3._nav_cancel is True, "")
+    check("导航中按停止：轮询定时器停掉", not _e3._nav_timer.isActive(), "")
+    check("导航中按停止：记下已取消", _e3._cancelled is True, "")
+    _started = []
+    _e3._begin_auto = lambda: _started.append(1)
+    _e3._nav_running = False          # 导航线程收尾
+    _e3._poll_nav()
+    check("取消后不会再自动开滚采", not _started, str(_started))
+
+    _e4 = SH.RosterEngine()
+    _e4._nav_running = True
+    _e4.heartbeat()
+    check("导航中算「忙」（Esc 才会被监听）", _e4._busy_reported is True,
+          str(_e4._busy_reported))
+    _e4._nav_running = False
+    _e4.heartbeat()
+    check("导航结束回空闲", _e4._busy_reported is False, str(_e4._busy_reported))
+
+    import inspect as _inspect
+    check("主按钮停止判定不再看旧工具的 _busy（headless 下它永远是 False）",
+          "_bridge._busy" not in _inspect.getsource(SH.Shell._toggle_roster), "")
+
+    # ---------------- 5s. v1.24：全局热键只在游戏/本工具前台时占用
+    check("前台范围判定返回布尔", isinstance(SH.W.in_scope(0), bool),
+          str(SH.W.in_scope(0)))
+    check("有 300 ms 的前台范围轮询", hasattr(w, "_scope_timer")
+          and w._scope_timer.interval() == 300, "")
+    import app.hotkey as HK
+    _real_reg = HK._register
+    HK._register = lambda hid, vk: True          # 打桩：不真去占系统键位
+    try:
+        _hk = HK.Hotkeys()
+        _hk.install([("F3", lambda: None), ("F4", lambda: None)])
+        check("装上：两个键都登记了", len(_hk.names()) == 2, str(_hk.names()))
+        _hk.set_scope(False)
+        check("离开作用域：热键全部注销", not _hk._map and not _hk.names(), str(_hk._map))
+        _hk.set_scope(True)
+        check("回到作用域：按原绑定重新注册", len(_hk.names()) == 2, str(_hk.names()))
+        check("切范围不丢绑定", len(_hk._binds) == 2, str(_hk._binds))
+        _hk.set_scope(False)
+    finally:
+        HK._register = _real_reg
+
+    # ---------------- 5t. v1.24：运行数据不撒在 exe 旁边
+    import appdir as _AD
+    check("源码态数据目录 = 工具目录",
+          _AD.app_dir(frozen=False) == Path(_AD.__file__).resolve().parent, "")
+    check("booklib 与 alliance_ocr 用同一个数据目录",
+          SH.BK._app_dir() == SH.A._app_dir(), "")
+    _pf = tmp / "portable"
+    (_pf / "预设").mkdir(parents=True)
+    (_pf / "x.exe").write_bytes(b"")
+    check("exe 旁已有 预设/ → 就地用（便携模式，老用户数据不动）",
+          _AD.app_dir(frozen=True, exe=_pf / "x.exe") == _pf, "")
+    _cf = tmp / "clean"
+    _cf.mkdir()
+    (_cf / "x.exe").write_bytes(b"")
+    _fa = tmp / "fakeappdata"
+    _fa.mkdir()
+    _old_ad = _os.environ.get("APPDATA")
+    _os.environ["APPDATA"] = str(_fa)
+    try:
+        _got = _AD.app_dir(frozen=True, exe=_cf / "x.exe")
+        check("干净 exe → 落到 %APPDATA%\\OrangeHelper",
+              _got == _fa / _AD.APP_NAME, str(_got))
+        check("目标目录自动建出来", _got.is_dir(), str(_got))
+        check("exe 旁边一个文件都没多",
+              not list(_cf.glob("预设")), str(list(_cf.iterdir())))
+    finally:
+        if _old_ad is None:
+            _os.environ.pop("APPDATA", None)
+        else:
+            _os.environ["APPDATA"] = _old_ad
 
     # 键名不再写死 F2
     check("提示文案取当前键位（F7）", KEYS.current("attach") == "F7",

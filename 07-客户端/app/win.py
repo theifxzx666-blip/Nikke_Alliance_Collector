@@ -14,6 +14,7 @@ v1.1 改了「对齐」的语义（用户实测反馈：**不是把客户端嵌�
     place_beside(shell, hwnd)    **并排**：必要时还原/缩放游戏，然后摆客户端
 """
 import ctypes
+import os
 import time
 from ctypes import wintypes
 
@@ -93,6 +94,34 @@ def game_link(hwnd) -> str:
     except Exception:
         return "gone"
     return "ok"
+
+
+def in_scope(game_hwnd) -> bool:
+    """前台窗口是不是「游戏」或「本工具」—— 全局热键只在这个范围内注册。
+
+    为什么需要：`RegisterHotKey` 是**独占**的。注册期间那个键在浏览器、聊天框里
+    也收不到，而且照样触发本工具的采集。用户的要求是"只在游戏和工具里响应"，
+    所以离开这个范围就该注销，把按键还给系统。
+
+    优先判断进程：工具自己的弹窗（赞助/关于/设置）也算本程序，用 hwnd 逐个比
+    会漏。判断不出结果时返回 True —— 宁可多响应，也别把功能整个关死。
+    """
+    u = ctypes.windll.user32
+    try:
+        fg = u.GetForegroundWindow()
+        if not fg:
+            return False
+        pid = wintypes.DWORD()
+        u.GetWindowThreadProcessId(fg, ctypes.byref(pid))
+        if pid.value == os.getpid():
+            return True                       # 本工具的任意窗口（含模态弹窗）
+        if game_hwnd:
+            # 点的是游戏里的子控件时，GetForegroundWindow 可能给的是子窗口
+            root = u.GetAncestor(fg, 2)       # GA_ROOT
+            return root == game_hwnd or fg == game_hwnd
+    except Exception:
+        return True
+    return False
 
 
 def aspect_ok(w, h) -> bool:
