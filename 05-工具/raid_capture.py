@@ -387,13 +387,17 @@ class CaptureEngine:
                              f"{self.DRAG_STEP}px/{int(self.DRAG_GAP * 1000)}ms"
                              f"（≈{self.DRAG_STEP / self.DRAG_GAP:.0f}px/s，"
                              f"就是 09:11 那轮验证过的参数）")
+                    # 导航进入时页面确实在第一行，但**第一行不一定在框里**：
+                    # 框的上沿是按卡片列表拖的，顶部日期栏（第1天/第2天）压着
+                    # 第一条卡片的上半截 —— 实测那条从头到尾没进过 CSV（v1.44）。
+                    # 所以两种入口都回顶，代价约 +2 秒。
                     if from_nav:
-                        self.say("刚由导航进入记录页，列表本来就在第一行 —— 跳过回顶")
+                        self.say("刚由导航进入记录页，先顶一下（防止第一行被框上沿切掉）…")
                     else:
                         self.say("先拉回列表顶部…")
-                        self._scroll_to_top(region, _l0.pitch)
-                        raw = A.grab(region)
-                        img = self._crop(raw)
+                    self._scroll_to_top(region, _l0.pitch)
+                    raw = A.grab(region)
+                    img = self._crop(raw)
             except Exception:
                 A.log_exc("hard-top")
             for i in range(MAX_SCREENS):
@@ -532,16 +536,19 @@ class CaptureEngine:
             if getattr(self, "deep", False) and rows and not self._stop.is_set():
                 self.say("严格采集：从底部往回再扫一遍…")
                 _before_all = len(rows)
-                _still = 0
                 for _k in range(80):
                     if self._stop.is_set():
                         break
                     if not self._drag_list(region, int(min(A.DRAG_MAX, max(
                             A.MIN_DRAG_PX, pitch * self.SCROLL_ROWS))), up=True):
                         break
+                    _prev_raw = raw
                     last = img
                     raw, _s, _st = A.wait_settled(region, raw)
                     img = self._crop(raw)
+                    # 判顶只看**位移**，不看"有没有新增"：正向采全时反向第一屏
+                    # 必然没有新增，拿它当"到顶"会 3 屏就收工（用户 01:36 实测）。
+                    _sh, _co = self._measure(region, _prev_raw, raw)
                     recs2, _loc2 = read_hard(img, eng, self._roster, self._bosses)
                     _n0 = len(rows)
                     if recs2:
@@ -560,13 +567,11 @@ class CaptureEngine:
                             rows.insert(_anchor if _anchor is not None else len(rows), _r2)
                         rows, _m2 = self._dedupe(rows)
                         self.emit_rows(rows)
-                    # 连续 3 屏没有任何新增 → 已经在顶部（列表到底时"滚不动"和
-                    # "全都在表里"是同一个现象，只能靠连续次数区分）
-                    _still = _still + 1 if len(rows) == _n0 else 0
-                    # 每 5 屏报一次：不然中间几十秒界面全黑，像卡住了（用户反馈）
+                    # 每 5 屏（以及到顶时）报一次，不然中间几十秒界面全黑，像卡住了
                     if _k % 5 == 0:
                         self.say(f"严格回扫 {_k} 屏 · 累计 {len(rows)} 条")
-                    if _still >= 3:
+                    if _sh is not None and abs(_sh) < 5:
+                        self.say(f"回扫到顶（位移 {_sh}px）· 共 {_k + 1} 屏")
                         break
                 _added = len(rows) - _before_all
                 if _added:

@@ -284,9 +284,12 @@ RH.read_hard = lambda img, eng, roster, bosses: ([], _Loc())
 try:
     cap_nav = _FakeCap()
     cap_nav.capture((0, 0, 100, 100), from_nav=True)
-    check("导航刚点进来的页面：跳过回顶", cap_nav.calls == [], str(cap_nav.calls))
-    check("跳过时日志有说明",
-          any("跳过回顶" in m for m in cap_nav.logs), str(cap_nav.logs[:4]))
+    # v1.44：导航进入**不再跳过回顶** —— 页面在第一行 ≠ 第一行在框里，
+    # 顶部日期栏压着第一条卡片的上半截，实测那条从头到尾没进过 CSV。
+    check("导航刚点进来的页面：也要回顶", cap_nav.calls != [], str(cap_nav.calls))
+    check("回顶时日志说明原因",
+          any("防止第一行被框上沿切掉" in m for m in cap_nav.logs),
+          str(cap_nav.logs[:4]))
 
     cap_user = _FakeCap()
     cap_user.capture((0, 0, 100, 100))          # 默认 False = 用户自己开页
