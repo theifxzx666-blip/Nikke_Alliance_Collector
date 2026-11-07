@@ -228,6 +228,19 @@ _out9, _n9 = raid_capture.CaptureEngine._dedupe(
      rec("甲", "古铁", 7000000000, pct="34.7%")])
 check("差 0.8% → 不按读错处理", len(_out9) == 2 and _n9 == 0, f"留下 {len(_out9)}")
 
+# v1.36：血量**一端缺失**时，靠伤害近似判重。
+# 实测 23:01 MAO 那条整行读歪 —— 伤害 `5 110 350 001`（串里还多空格）、血量空，
+# 和紧邻的 `5,113,250,881 / 0.0%` 是同一条。旧判据要求两端血量都非空才比伤害。
+_out10, _n10 = raid_capture.CaptureEngine._dedupe(
+    [rec("MAO", "古铁", 5113250881, pct="0.0%"), rec("MAO", "古铁", 5110350001, pct="")])
+check("血量一端缺失 + 伤害差 0.06% → 同一条",
+      len(_out10) == 1 and _n10 == 1, f"留下 {len(_out10)} 合并 {_n10}")
+
+# 反例：两端血量都缺、伤害差 5% —— 没有任何可靠依据，不能合
+_out11, _n11 = raid_capture.CaptureEngine._dedupe(
+    [rec("甲", "古铁", 1000000, pct=""), rec("甲", "古铁", 950000, pct="")])
+check("两端都缺血量、伤害差 5% → 不合并", len(_out11) == 2 and _n11 == 0, f"留下 {len(_out11)}")
+
 # ---------------- v1.17：导航点进来的页面不该再回顶
 import threading                                          # noqa: E402
 import alliance_ocr as A                                   # noqa: E402

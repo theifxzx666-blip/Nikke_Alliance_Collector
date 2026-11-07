@@ -32,7 +32,10 @@ class CaptureEngine:
     # 10:01 那轮教训：试探把"大步 286px/s"选成了最优（188px），但那 188px 是松手
     # 后惯性途中的读数，实际每次滚多少不可控，紧接着就出现"重叠 2/5 对不上"。
     DRAG_STEP, DRAG_GAP = A.DRAG_STEP_PX, A.DRAG_STEP_GAP
-    SCROLL_ROWS = 2.5
+    # 每次滚多少行。2.5 → 2.0（v1.36）：5 轮真实样本里 165 人次漏了 7 条，
+    # 全落在"步长偏了半行、边界行被两屏各裁一半"这种位置。滚 2 行时重叠 4 行，
+    # 边界行在两屏都是完整行。代价是拖动次数 +25%（记录页 26 → 33 次，约 +30 秒）。
+    SCROLL_ROWS = 2.0
 
     # 给调试面板看的现场快照（不算逻辑，只是留档）
     last_pitch = 0.0
@@ -153,8 +156,11 @@ class CaptureEngine:
         if not ma or ma != mb:
             return False
         pa, pb = (a.get("pct") or "").strip(), (b.get("pct") or "").strip()
-        if not pa or pa != pb:
+        if pa and pb and pa != pb:
             return False
+        # 两端都有血量时必须相同（真打两刀 BOSS 已经掉血，百分比不会一样）。
+        # **一端缺失时**（实测 23:01 MAO 那条整行读歪、血量没认出来）改用伤害
+        # 近似判断：同一个人对同一个 BOSS、伤害差 0.1% 以内，只能是同一刀。
         big = max(abs(ad), abs(bd))
         return big > 0 and abs(ad - bd) <= big * 0.001
 
