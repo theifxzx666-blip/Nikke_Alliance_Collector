@@ -215,5 +215,7 @@ def read_hard(img, eng, roster=None, bosses=None):
                          "conf": round(min(_sc), 3) if _sc else None,
                          "member_note": c.get("member_note") or "",
                          "boss_note": _bnote,
-                         "damage_note": c.get("damage_note") or ""})
+                         "damage_note": c.get("damage_note") or "",
+                         # v1.47：屏内纵坐标，收工时配合屏号做最终排序
+                         "_y": c.get("cy") or 0})
     return recs, loc

@@ -130,11 +130,17 @@ class CaptureEngine:
         for nxt in recs[idx + 1:]:
             pos = next((j for j, x in enumerate(rows) if self._same_rec(x, nxt)), None)
             if pos is not None:
+                # 屏号/坐标跟着锚点走（v1.47）：回扫补进的行原本没有 `_pass`，
+                # 不继承的话最终排序会把它们全甩到 9999 那一档的末尾。
+                rec.setdefault("_pass", rows[pos].get("_pass", 9999))
+                rec["_y"] = int(rows[pos].get("_y") or 0) - 1      # 排在锚点前面
                 rows.insert(pos, rec)
                 return
         for prv in reversed(recs[:idx]):
             pos = next((j for j, x in enumerate(rows) if self._same_rec(x, prv)), None)
             if pos is not None:
+                rec.setdefault("_pass", rows[pos].get("_pass", 9999))
+                rec["_y"] = int(rows[pos].get("_y") or 0) + 1      # 排在锚点后面
                 rows.insert(pos + 1, rec)
                 return
         rows.insert(min(max(0, base + idx), len(rows)), rec)
@@ -175,7 +181,13 @@ class CaptureEngine:
             if r >= 0.6:
                 return True
             return min(len(ma), len(mb)) <= 3 and r >= 0.5
-        if not ma or ma != mb:
+        if not ma or not mb:
+            return False
+        # 伤害不等时，成员名**不能要求严格相等** —— 残读那一行名字往往也带错字
+        # （实测 `小卡卡` 被读成 `小卡卜`，严格相等直接把这对挡在门外）。
+        # 用和"伤害相同"分支一致的相似度门槛：短名 0.5、长名 0.6。
+        _nr = difflib.SequenceMatcher(None, ma, mb).ratio()
+        if _nr < (0.5 if min(len(ma), len(mb)) <= 3 else 0.6):
             return False
         pa, pb = (a.get("pct") or "").strip(), (b.get("pct") or "").strip()
         if pa and pb and pa != pb:
@@ -184,7 +196,19 @@ class CaptureEngine:
         # **一端缺失时**（实测 23:01 MAO 那条整行读歪、血量没认出来）改用伤害
         # 近似判断：同一个人对同一个 BOSS、伤害差 0.1% 以内，只能是同一刀。
         big = max(abs(ad), abs(bd))
-        return big > 0 and abs(ad - bd) <= big * 0.001
+        if big > 0 and abs(ad - bd) <= big * 0.001:
+            return True
+        # 相邻残读（v1.47）：**血量完全相同 + 一方 BOSS 没读到** → 同一条。
+        #
+        # 实测 `小卡卡·医师 6,712,891,076 / 93.3%` 与 `小卡卜 0,712,091,076 / 93.3%`：
+        # 名字差一字、伤害读坏两位（首位 6→0、第五位 8→0）、BOSS 空。
+        # 伤害数字完全不可比（差 8.4 倍），所以只能靠**血量** —— 真打两刀时
+        # BOSS 已经掉血，同一个人对同一个 BOSS 不可能出现两个相同的百分比。
+        # 一方 BOSS 空是必要条件：两侧 BOSS 都有值时必须已经相等（上面查过）。
+        if pa and pa == pb and (not (a.get("boss") or "").strip()
+                                or not (b.get("boss") or "").strip()):
+            return True
+        return False
 
     @classmethod
     def _contains(cls, rows, rec):
@@ -451,6 +475,8 @@ class CaptureEngine:
                     if corr < 0.3:
                         shift = None
                     added, info = rc.splice(last_rows, recs, shift, pitch)
+                    for _r in added:
+                        _r.setdefault("_pass", i)
                     self.last_splice = dict(info, measured_px=shift_px)
                     if info.get("same"):
                         miss += 1
@@ -621,6 +647,11 @@ class CaptureEngine:
 
             # 收工自检：这两条不拦流程，只把"可能有问题"当场说出来。
             # 以前要等导出后人工翻 CSV 才发现，代价太大。
+            # v1.47 最终排序：**按"首次出现的屏号 + 屏内 y"**，不再依赖任何
+            # "插到第几个"的推算。滚 2 行、重叠 4 行 → 每条首次出现的屏号单调递增；
+            # 同屏内 OCR 直接给的顺序最可靠。补回/回扫怎么插都不影响最终结果。
+            if rows:
+                rows.sort(key=lambda r: (int(r.get("_pass", 9999)), int(r.get("_y") or 0)))
             _rows = rows or []
             _cnt = {}
             for _r in _rows:
