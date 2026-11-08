@@ -4499,6 +4499,16 @@ class RosterMixin:
         if complete and getattr(self, "_nav_top_ok", None) is False:
             complete = False
             log("auto", "导航没确认列表回到第一行 → 本轮不算完整采集，库不记帐", "WARN")
+        # 页面上的 n 是硬事实：写着 32 人、只采到 12 人，就不是"到底了"，
+        # 不管调用方传什么 complete。2026-11-08 实测：V 区名单页滚到 12 人就
+        # 推不动，按"连续 3 次无新人"正常收工 → complete=True → 退会判定把库里
+        # 22 人记成"这次没见到"，连续两轮就真被永久移出（库 33 → 10）。
+        # 留 20% 余量：32 人采到 30 个属正常漏读，不该因此永远不记帐；
+        # 但 12/32 这种断层必须拦住。
+        if complete and self._total_hint and len(self.names) < self._total_hint * 0.8:
+            complete = False
+            log("auto", f"页面 {self._total_hint} 人、只采到 {len(self.names)} 人 "
+                        f"→ 本轮不算完整采集，库不记帐（不判退会）", "WARN")
         self._continuous = False
         self._focused = False
         # 采集期间光标被挪到角落避让，停的时候还回去——否则用户会找不到鼠标
@@ -5256,6 +5266,16 @@ class RosterMixin:
             if new == 0:
                 self._empty_rounds += 1
                 log("auto", f"连续第 {self._empty_rounds} 轮无新人", "WARN")
+                # v1.60：第一次"无新人"先别当成到底。每屏只滚 1.25 行，5 行视野里
+                # 只换掉一行，而这一行必然贴着视野上下边缘，很容易被候选带/颜色
+                # 过滤掉（2026-11-08 实测：候选带 8 · 过色 6 · 识别 5 —— 2 个被判掉）。
+                # 步长翻倍让它进入视野中央，比原地再滚一次有效得多。
+                if self._empty_rounds == 1 and self._step_boost < 2:
+                    self._step_boost = 2
+                    log("auto", "无新人可能只是新行落在视野边缘被滤掉 → "
+                                "步长翻倍（约 2.5 行）再试一次", "WARN")
+                    self.after(SCROLL_GAP, self._do_scroll)
+                    return
                 if self._empty_rounds >= MAX_EMPTY:
                     d = self._last_diff
                     tail = f"（最后画面差 {d:.2f}）" if d is not None else ""

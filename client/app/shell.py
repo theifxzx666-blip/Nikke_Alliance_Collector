@@ -1380,6 +1380,17 @@ class Shell(QWidget):
         if err:
             self.say(f"库名不行：{err}", "WARN")
             return
+        # 同名直接覆盖 = 把这个库的人全删了。2026-11-08 实测踩过：
+        # 用户输入已在用的「嗷润吉V区」，32 人的库当场变成空的，
+        # 接着采到 12 人就停，导出只剩 10 人。**建库前必须先看一眼。**
+        # 查文件而不是查索引：索引可能滞后，文件在就是真的在。
+        try:
+            if BK.roster_path(n).exists():
+                self.say(f"库里已经有「{n}」了 —— 换一个名字，"
+                         f"或先在「管理…」里删掉旧的。新建会把这个库的人清空", "WARN")
+                return
+        except Exception:
+            pass
         if not BK.write_roster(n, {"version": 1, "rounds": 0, "names": {}}):
             self.say("建库失败（目录权限？）", "WARN")
             return
