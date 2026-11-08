@@ -2072,10 +2072,22 @@ def scan(img: Image.Image, debug_dir: Path | None = None, pitch=(50, 140)):
         text, score = read_line(img, box)
         if debug_dir is not None:
             img.crop(box).save(debug_dir / f"band{i:02d}_{y0}-{y1}.png")
-        if score < MIN_SCORE:
-            continue
-        if dim and not is_anon_band(text):
-            continue                      # 颜色不对又不是匿名 → 照旧当噪声
+        # 匿名占位（`******`）要先认出来再看分数和颜色：
+        # 它的笔迹是浅灰、OCR 置信度天然偏低，原来"分数不够先 continue"会把它
+        # 挡在 is_anon_band 之前 —— 2026-11-08 实测每屏 `过色 5`，5 个带恒定被丢，
+        # 联盟 32 人里那个匿名成员一直采不到。
+        _anon = is_anon_band(text)
+        if not _anon:
+            if score < MIN_SCORE:
+                continue
+            if dim:
+                continue                  # 颜色不对又不是匿名 → 照旧当噪声
+        else:
+            # 星号带一律归一到同一个写法。不然 `******` / `*****` / `* * * *`
+            # 会被当成三个不同的人，各自 _hits 都不够 2 → 全被"只露一次"丢掉。
+            # 代价：一个盟里两个匿名成员会被并成一个 —— 但那种情况本来就无法区分，
+            # 少算一个人比丢光强，而且人数对不上时不会触发"完整采集"的退会判定。
+            text = "******"
         if not plausible(text):
             continue
         rows.append(((y0 + y1) // 2, text, round(score, 3)))
