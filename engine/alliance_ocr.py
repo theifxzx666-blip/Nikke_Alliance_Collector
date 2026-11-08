@@ -1494,7 +1494,7 @@ _NOISE = re.compile(r"(最近登录|小时前|分钟前|刚刚|联盟成员|挑�
 _NICK_OK = re.compile(r"^[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7afA-Za-z0-9_.\-·\s]{2,14}$")
 # 匿名成员：游戏把昵称打成 `******`（v1.32）。真实存在的一行，但没有任何
 # 可识别字符 —— 不特判就会被 `_NICK_OK` 和"至少一个中文/字母"两道关挡掉。
-_ANON = re.compile(r"^[*＊✱✳•·・]{2,}$")
+_ANON = re.compile(r"^[*＊✱✳•·・\s]{2,}$")
 
 
 def is_anon_band(text: str) -> bool:
@@ -1831,6 +1831,17 @@ def roster_cand(text: str, names, alias=None, floor: float | None = None) -> tup
     hit = [n for n in list(names) if zh.same_word(n, text)]
     if len(hit) == 1 and hit[0] != text:
         return hit[0], 0.95
+    # 横线类字符（- _ — －）和中文「一」在 ID 名里几乎总是同一个人的两种读法。
+    # 实测 `I-IXX` 与库里的 `I一IXX` 只差这一位，却被 `same_row` 的"书写系统逐位
+    # 一致"判掉 —— 结果库里多一个人、报告里多一句"没见到 I一IXX"，用户还得手动删。
+    # **只在这一层归一**，不动 `same_row`（那道关要防 `命OVO` vs `DORO` 这种）。
+    # 候选不唯一（库里真有两个只差横线的名字）就不表态，交给人工。
+    _dash = str.maketrans("-—_－", "一一一一")
+    _t2 = text.translate(_dash)
+    if _t2 != text:
+        hit = [n for n in list(names) if n.translate(_dash) == _t2]
+        if len(hit) == 1 and hit[0] != text:
+            return hit[0], 0.9
     # 两字名不做模糊归档：`空本`/`空木` 是同一行读歪，`大白`/`萧白` 却是两个
     # 真人，相似度都正好 0.5，光凭字面分不开。两字名的误读交给位置合并。
     if len(text) < ROSTER_MIN_LEN:
@@ -4164,6 +4175,9 @@ class RosterMixin:
         self._continuous = True
         self._log_mode(True)              # 先撑开日志区：采集期间要看现场
         self._empty_rounds = 0
+        # v1.61：新开一轮，重新允许"导出时补一次对账"。收工提交后置 True，
+        # 之后用户在表格里删人 / 改名才不会被导出的回写冲掉。
+        self._roster_committed = False
         self._prev_names = set()
         self._prev_ordered = []           # 上一屏按 y 排序的名字，用于序列对齐算滚动行数
         self._fling = FLING_INIT          # 每次开跑重新标定：不同列表惯性不一样
@@ -4541,6 +4555,10 @@ class RosterMixin:
         # 名单空着就别碰库：窗口丢了、校验没过这类中断会把 rounds 虚增，
         # 而"连续两轮没见到就移出库"是靠这个计数判的
         report = self._commit_roster(complete) if self.names else ""
+        if self.names:
+            # 记一笔"本轮结果已经进库"。导出时据此跳过重复对账，
+            # 否则用户在表格里删掉的人会被采集快照写回去（v1.61 修）。
+            self._roster_committed = True
         msg = re.sub(r"共 \d+ 人", f"共 {len(self.names)} 人", msg)
         # "校人数"这一关的意义就在这：页面写着 32、采到 33，说明有歪读混进来了；
         # 采到 30 说明漏了。两种都必须当场说出来——一张"看着完整"的名单进库，
@@ -5025,14 +5043,21 @@ class RosterMixin:
         dropped = []
         # 名单里连 3 个人都不到，说明这轮根本没采到东西，不能当作"别人都退会了"
         if complete and len(cur) >= 3:
+            # v1.61：**本轮完整采到末尾、且人数与页面完全一致**时，"没见到"就是真的
+            # 不在联盟里，不必再等第二轮。
+            # 原来一律要给 2 轮，用户手动重采一次后看到"库里还是 34 人、还得自己删"
+            # ——那已经不是"重新采集"了。人数完全吻合是足够硬的证据：
+            # 页面上写着 32、这次正好采到 32，库里多出来的人只能是退会或改名。
+            exact = bool(self._total_hint) and len(cur) == int(self._total_hint)
             for n, e in list(names.items()):
                 if n in cur:
                     continue
                 e["miss"] = int(e.get("miss", 0)) + 1
-                if e["miss"] >= ROSTER_DROP:
+                if exact or e["miss"] >= ROSTER_DROP:
                     names.pop(n, None)
                     dropped.append(n)
-                    log("roster", f"连续 {ROSTER_DROP} 轮完整采集都没见到「{n}」，已移出昵称库", "WARN")
+                    log("roster", f"完整采集且人数吻合（{len(cur)}/{self._total_hint}），"
+                                  f"没见到「{n}」→ 直接移出昵称库", "WARN")
                 else:
                     gone.append(n)
 

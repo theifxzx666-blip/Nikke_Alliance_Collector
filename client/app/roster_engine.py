@@ -314,11 +314,16 @@ class RosterEngine(QObject, RosterMixin):
         """收工对账后写 CSV。返回 (人数, Path 或失败原因)。"""
         if not (getattr(self, "names", None) or {}):
             return export_book_csv()      # 没采过：直接导当前库（v1.21）
-        try:
-            self._reconcile()
-            self._roster_apply()
-        except Exception as e:
-            return 0, f"收工对账失败：{e}"
+        # v1.61：**收工时已经提交过一次，这里不能再提交。**
+        # 原来的 bug：用户采集完在表格里删掉某人（写库），一按导出，这里又跑
+        # `_roster_apply()` 把内存里的采集快照写回库 —— 删掉的人当场复活，
+        # 导出自然"不受影响"。现在只在还没提交过时才补一次对账。
+        if not getattr(self, "_roster_committed", False):
+            try:
+                self._reconcile()
+                self._roster_apply()
+            except Exception as e:
+                return 0, f"收工对账失败：{e}"
         # v1.35：对账（这一步才把采集结果写进库）之后，**从库读**再导出。
         # 以前用 `self.names_rows()` —— 那是采集那一刻的快照，用户随后在表格里
         # 加人 / 改名 / 删除，写进去的是库文件，导出却还按旧快照走，等于白改。
