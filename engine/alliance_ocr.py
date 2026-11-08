@@ -4187,6 +4187,16 @@ class RosterMixin:
         self._continuous = True
         self._log_mode(True)              # 先撑开日志区：采集期间要看现场
         self._empty_rounds = 0
+        # v1.62：**每轮重新累积**。`self.names` 是按屏幕内 y 逐行追加的，也就是
+        # 游戏里从上到下的顺序；不清空的话第二轮会变成"上一轮的人排在前、本轮
+        # 新人追加在后"，导出顺序跟实机对不上。上一轮的结果已经在收工时进了库。
+        self.names = {}
+        self._seen = {}
+        self._hits = {}
+        self._links = set()
+        self._gate = {}
+        self._twin = {}
+        self._fix_cnt = {}
         # v1.61：新开一轮，重新允许"导出时补一次对账"。收工提交后置 True，
         # 之后用户在表格里删人 / 改名才不会被导出的回写冲掉。
         self._roster_committed = False
@@ -5083,6 +5093,18 @@ class RosterMixin:
                 al.append(src)
                 alias_new += 1
                 log("roster", f"记住别名：「{src}」今后直接归到「{dst}」（本轮读到 {cnt} 屏）")
+
+        # v1.62：**按本轮采集顺序重排库里的 names**。
+        # `self.names` 是按屏幕内 y 逐行累积的，也就是游戏里从上到下的顺序；
+        # 而 Python 的 dict 保序，`export_book_csv` 直接照抄 —— 导出顺序就与实机一致。
+        # 原来写库时遍历的是 `set(self.names)`，顺序随机，导出的名单自然是乱的。
+        # 库里上一轮就有、这次没采到的人排在后面，不打断本次的顺序。
+        _seq = [n for n in self.names if n in names]
+        _have = set(_seq)
+        _seq += [n for n in names if n not in _have]
+        self._roster["names"] = {n: names[n] for n in _seq}
+        log("roster", f"名单按实机顺序重排：{len(_seq)} 人（本次采到 "
+                      f"{len(self.names)} 个）")
 
         self._roster["rounds"] = int(self._roster.get("rounds", 0)) + 1
         self._roster["version"] = 1
