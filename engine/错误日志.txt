@@ -1,8 +1,8 @@
 Traceback (most recent call last):
-  File "F:\Codex\Nikke\02_工位\10_数据管线\OCR采集\05-工具\alliance_ocr.py", line 2139, in main
+  File "D:\Codex\Nikke\02_工位\10_数据管线\OCR采集\05-工具\alliance_ocr.py", line 2139, in main
     App().mainloop()
     ^^^^^
-  File "F:\Codex\Nikke\02_工位\10_数据管线\OCR采集\05-工具\alliance_ocr.py", line 1190, in __init__
+  File "D:\Codex\Nikke\02_工位\10_数据管线\OCR采集\05-工具\alliance_ocr.py", line 1190, in __init__
     self._drag_scale = DRAG_SCALE_START  # 拖动距离自适应系数，按实测行数调整
                        ^^^^^^^^^^^^^^^^
 NameError: name 'DRAG_SCALE_START' is not defined

@@ -1096,7 +1096,7 @@ def aspect_label(a: float, tol: float = ASPECT_TOL) -> str:
 def _rank(info: WinInfo) -> tuple:
     """排序权重。只影响列表顺序，不影响判据——最终由用户点选确认。
 
-    注意不能只按「标题含 nikke」排：实测 `F:\\Codex\\Nikke\\...` 这类终端标题
+    注意不能只按「标题含 nikke」排：实测 `D:\\Codex\\Nikke\\...` 这类终端标题
     也会命中，反而把真游戏挤下去。所以标题像路径的一律降到末尾。
     """
     t = info.title.strip()

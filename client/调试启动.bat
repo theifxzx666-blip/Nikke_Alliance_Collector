@@ -1,8 +1,8 @@
 @echo off
 rem NIKKE 采集客户端（调试启动，保留控制台看报错）
-cd /d "D:\Codex\Nikke\Nikke_Skills\OCR采集\07-客户端"
+cd /d "D:\Codex\Nikke\02_工位\10_数据管线\OCR采集\07-客户端"
 if errorlevel 1 (
-  echo 找不到客户端目录：D:\Codex\Nikke\Nikke_Skills\OCR采集\07-客户端
+  echo 找不到客户端目录：D:\Codex\Nikke\02_工位\10_数据管线\OCR采集\07-客户端
   pause
   exit /b 1
 )
